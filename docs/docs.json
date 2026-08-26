@@ -272,6 +272,7 @@
      "developer/architecture",
      "developer/gpu-learning-lab",
      "developer/gpu-learning-lab-single-gpu-rollout",
+     "developer/gpu-learning-lab-empathy-reward",
      "developer/versions",
      "developer/moore-threads-musa-support",
      "developer/debug",

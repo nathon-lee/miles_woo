@@ -427,6 +427,11 @@ trainer 和 rollout 做 offload/onload。
 `--debug-rollout-only`，不包含 backward、optimizer step 和权重同步；完整命令、
 故障修复和指标见 [RTX A5000 单卡 rollout 与奖励实测](/developer/gpu-learning-lab-single-gpu-rollout)。
 
+在同一环境中，一次非数学实验还验证了 `--custom-rm-path`、
+多维浮点 reward 和 `Sample.metadata` 分项落盘。它同时暴露了关键词
+奖励对语义质量不敏感的 reward hacking 风险，见
+[情绪支持对话的自定义奖励实测](/developer/gpu-learning-lab-empathy-reward)。
+
 ### 2.2 两卡推荐基线
 
 两卡命令使用更大的 token budget，同时能观察 FSDP 两个 rank 的初始化、数据分片和集体通信：
