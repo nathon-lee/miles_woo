@@ -422,6 +422,11 @@ trainer 和 rollout 做 offload/onload。
 这条单卡路线是根据当前资源分配与参数逻辑得到的可运行配置，本仓库尚无
 单卡完整 E2E 结果。请把实际 GPU 运行结果记录为探索证据，不要表述为已有 CI 保证。
 
+一次 RTX A5000 24 GB 的实测已经跑通单卡 rollout、`math` reward
+和一组 `[0, 1, 1, 1]` 的有效 GRPO 分组信号。该实验使用
+`--debug-rollout-only`，不包含 backward、optimizer step 和权重同步；完整命令、
+故障修复和指标见 [RTX A5000 单卡 rollout 与奖励实测](/developer/gpu-learning-lab-single-gpu-rollout)。
+
 ### 2.2 两卡推荐基线
 
 两卡命令使用更大的 token budget，同时能观察 FSDP 两个 rank 的初始化、数据分片和集体通信：
@@ -522,10 +527,23 @@ test -f /root/shared_data/single-gpu-rollout-only/rollout_0.pt
 查看保存的 Sample：
 
 ```bash
-python3 -m miles.utils.debug_utils.display_debug_rollout_data \
-  --load-debug-rollout-data '/root/shared_data/single-gpu-rollout-only/rollout_{rollout_id}.pt' \
-  --category train
+python3 - <<'PY'
+import torch
+
+path = "/root/shared_data/single-gpu-rollout-only/rollout_0.pt"
+pack = torch.load(path, weights_only=False, map_location="cpu")
+
+for i, sample in enumerate(pack["samples"]):
+    print(f"\n===== sample {i} =====")
+    for key in ("group_index", "index", "response_length", "label", "reward", "status"):
+        print(f"{key}:", sample.get(key))
+    print("response tail:", sample.get("response", "")[-400:])
+PY
 ```
+
+当前 checkout 的 `display_debug_rollout_data` 会导入一个未从
+`miles.ray.rollout` 导出的 `compute_perf_metrics_from_samples`，因此本教程
+使用 `torch.load` 直接检查。修复该工具后可再恢复封装命令。
 
 重点查看 `prompt`、`response`、`response_length`、`label`、`reward` 和 `status`。这就是
 rollout 与 trainer 之间最重要的数据契约。
