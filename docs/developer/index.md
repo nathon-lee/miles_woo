@@ -20,6 +20,12 @@ short tour for new contributors.
 
   </Card>
 
+  <Card title="GPU Learning Lab" icon="graduation-cap" href="/developer/gpu-learning-lab">
+
+    Build a one- or two-GPU lab and trace rollout, training, and weight updates end to end.
+
+  </Card>
+
   <Card title="Versions and Images" icon="layer-group" href="/developer/versions">
 
     How the miles, SGLang and Megatron-LM trees fit together, and how to bump one.
@@ -29,6 +35,12 @@ short tour for new contributors.
   <Card title="Debugging" icon="bug" href="/developer/debug">
 
     Isolating rollout from training, the debug and CI assertion flags, aligning precision.
+
+  </Card>
+
+  <Card title="Moore Threads MUSA Support" icon="microchip" href="/developer/moore-threads-musa-support">
+
+    Design, implementation stages, feature boundaries, and validation for bringing Miles to MUSA.
 
   </Card>
 

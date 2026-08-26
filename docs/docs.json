@@ -270,7 +270,9 @@
      "developer/index",
      "developer/contributor-guide",
      "developer/architecture",
+     "developer/gpu-learning-lab",
      "developer/versions",
+     "developer/moore-threads-musa-support",
      "developer/debug",
      {
       "group": "CI",
