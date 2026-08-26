@@ -419,13 +419,24 @@ trainer 和 rollout 做 offload/onload。
 4. 将 `--sglang-mem-fraction-static` 从 `0.45` 降到 `0.35`；
 5. 仍然失败时转用两卡，不要通过随机升级 torch 或 SGLang 掩盖资源问题。
 
-这条单卡路线是根据当前资源分配与参数逻辑得到的可运行配置，本仓库尚无
-单卡完整 E2E 结果。请把实际 GPU 运行结果记录为探索证据，不要表述为已有 CI 保证。
+这条单卡路线是根据当前资源分配与参数逻辑得到的学习配置。后续已有一组
+RTX A5000 两轮完整训练实测，但它仍是单 prompt、小步数探索，不代表已有 CI
+或大规模训练保证；详见[单卡沉没成本决策 RL 成功实测](/developer/gpu-learning-lab-sunk-cost-training)。
 
 一次 RTX A5000 24 GB 的实测已经跑通单卡 rollout、`math` reward
 和一组 `[0, 1, 1, 1]` 的有效 GRPO 分组信号。该实验使用
 `--debug-rollout-only`，不包含 backward、optimizer step 和权重同步；完整命令、
 故障修复和指标见 [RTX A5000 单卡 rollout 与奖励实测](/developer/gpu-learning-lab-single-gpu-rollout)。
+
+在同一环境中，一次非数学实验还验证了 `--custom-rm-path`、
+多维浮点 reward 和 `Sample.metadata` 分项落盘。它同时暴露了关键词
+奖励对语义质量不敏感的 reward hacking 风险，见
+[情绪支持对话的自定义奖励实测](/developer/gpu-learning-lab-empathy-reward)。
+
+随后在相同的单卡环境中，已跑通两轮非数学 GRPO：包括 FSDP backward、checkpoint
+保存、训练后权重同步和第二轮 rollout 使用新 `weight_version`。完整命令、必要日志
+和 checkpoint 检查见
+[单卡沉没成本决策 RL 成功实测](/developer/gpu-learning-lab-sunk-cost-training)。
 
 ### 2.2 两卡推荐基线
 

@@ -252,3 +252,6 @@ nvidia-smi
 `--debug-rollout-only`，并以两轮连续的 rollout、train step 和 weight update
 作为完整闭环验收标准。
 
+完成数学二值 reward 后，可继续运行
+[情绪支持对话的自定义奖励实测](/developer/gpu-learning-lab-empathy-reward)，
+学习多维 reward 分解、元数据记录和 reward hacking 诊断。

@@ -26,6 +26,12 @@ short tour for new contributors.
 
   </Card>
 
+  <Card title="Single-GPU RL Run" icon="microchip" href="/developer/gpu-learning-lab-sunk-cost-training">
+
+    A complete Qwen3-0.6B FSDP run with custom decision reward, checkpoints, and weight-sync logs.
+
+  </Card>
+
   <Card title="Versions and Images" icon="layer-group" href="/developer/versions">
 
     How the miles, SGLang and Megatron-LM trees fit together, and how to bump one.
