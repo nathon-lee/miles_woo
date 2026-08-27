@@ -7,10 +7,12 @@ from typing import Any
 import yaml
 from sglang_router.launch_router import RouterArgs
 
+from miles._bootstrap import HARDWARE_PLATFORM_ENV, HARDWARE_PLATFORMS
 from miles.backends.sglang_utils.arguments import add_sglang_arguments, collect_eval_sglang_overrides
 from miles.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from miles.dashboard.args import add_dashboard_arguments, validate_dashboard_args
 from miles.rollout.checkpoint_eval import is_checkpoint_eval_fn
+from miles.utils.accelerator import process_group_backend, runtime_summary
 from miles.utils.chat_template_utils.tito_tokenizer import TITOTokenizerType
 from miles.utils.environ import enable_experimental_ft_trainer, use_legacy_rollout_v1
 from miles.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
@@ -104,6 +106,17 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
     def add_miles_arguments(parser):
         # Ray
         def add_cluster_arguments(parser):
+            parser.add_argument(
+                "--hardware-platform",
+                choices=HARDWARE_PLATFORMS,
+                default=os.environ.get(HARDWARE_PLATFORM_ENV, "auto"),
+                help=(
+                    "Hardware runtime to use. 'auto' preserves CUDA/ROCm detection and detects an explicitly "
+                    "configured MUSA environment; explicit requests fail fast when the runtime is unavailable. "
+                    "Set this on the command line or through MILES_HARDWARE_PLATFORM, not in a YAML config, "
+                    "because hardware bootstrap runs before config files and optional runtimes are imported."
+                ),
+            )
             parser.add_argument("--actor-num-nodes", type=int, default=1, help="Number of nodes for training actor")
             parser.add_argument(
                 "--actor-num-gpus-per-node", type=int, default=8, help="Number of gpus per node for training actor"
@@ -253,7 +266,7 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 ),
             )
 
-            reset_arg(parser, "--distributed-backend", type=str, default="nccl")
+            reset_arg(parser, "--distributed-backend", type=str, default="auto")
             reset_arg(parser, "--distributed-timeout-minutes", type=int, default=10)
 
             return parser
@@ -2848,6 +2861,28 @@ def _validate_rematerialize_param_from_master_weight(args):
 
 
 def miles_validate_args(args):
+    requested_platform = getattr(args, "hardware_platform", "auto")
+    bootstrapped_platform = os.environ.get(HARDWARE_PLATFORM_ENV, "auto")
+    if requested_platform != "auto" and requested_platform != bootstrapped_platform:
+        raise RuntimeError(
+            f"--hardware-platform={requested_platform} was applied after bootstrap; pass it on the command line "
+            f"or set {HARDWARE_PLATFORM_ENV}={requested_platform} before starting Miles"
+        )
+
+    summary = runtime_summary(requested=requested_platform)
+    args.hardware_platform = summary["platform"]
+    args.distributed_backend = process_group_backend(
+        backend=getattr(args, "distributed_backend", "auto"),
+        platform=args.hardware_platform,
+    )
+    logger.info(
+        "Hardware runtime: requested=%s, platform=%s, device_type=%s, distributed_backend=%s",
+        summary["requested_platform"],
+        summary["platform"],
+        summary["device_type"],
+        args.distributed_backend,
+    )
+
     validate_dashboard_args(args)
 
     args.ft_components = _resolve_ft_components(args)

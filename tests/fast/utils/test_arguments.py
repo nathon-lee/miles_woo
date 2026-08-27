@@ -49,6 +49,16 @@ def make_function_without_add_arguments():
     return my_fn
 
 
+def test_hardware_platform_and_auto_backend_are_parsed():
+    parser = argparse.ArgumentParser()
+    get_miles_extra_args_provider()(parser)
+
+    args = parser.parse_args(["--hardware-platform", "musa"] + REQUIRED_ARGS)
+
+    assert args.hardware_platform == "musa"
+    assert args.distributed_backend == "auto"
+
+
 @pytest.mark.parametrize("path_arg", PATH_ARGS)
 class TestAddArgumentsSupport:
 

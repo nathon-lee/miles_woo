@@ -4,6 +4,10 @@ import asyncio
 import logging
 from pathlib import Path
 
+from miles._bootstrap import bootstrap_hardware
+
+bootstrap_hardware()
+
 import ray
 
 from miles.ray.multi_lora.controller import create_multilora_controller, get_multi_lora_controller
