@@ -9,7 +9,8 @@ description: 基于当前 Miles、torch_musa、SGLang 和 Megatron-LM 现状设�
 外部 patch 仍然是固定版本上的临时依赖，不是 Miles 平台设计本身。
 
 本文的仓库判断基于 Miles `f2b7c792`（2026-08-26 的 `main`）。依赖项目变化较快，
-实施前应重新锁定和验证 commit。
+实施前应重新锁定和验证 commit。本文对 Miles 公开 roadmap 和 AMD/ROCm 进展的
+补充检查日期为 2026-08-27；issue 状态和验证结果以链接中的最新内容为准。
 
 ## 结论
 
@@ -78,6 +79,57 @@ PR #2286 风格的 capability probing 兼容依赖版本，以外部 Megatron pa
 
 PR #2216 的 MUSA/MCCL 测试主要由 CPU mock、fake `torch.musa` 和 backend 字符串完成；
 Slime PR 合入状态只能作为代码设计证据，真实硬件能力仍需按本文验收阶梯重新验证。
+
+## 从 AMD/ROCm 路线图学什么
+
+AMD 对 Miles 的支持已经从“设备能否启动”进入训练、rollout、权重同步、低精度、
+长稳和 CI 共同验证的阶段。这些结果不能直接证明 MUSA 可用，但其问题分层和
+验收方法值得直接复用。
+
+### 公开路线图的层级
+
+| 层级 | 跟踪项 | 对 MUSA 的用法 |
+| --- | --- | --- |
+| Miles 总路线 | [#797 2026 Q2 Roadmap](https://github.com/radixark/miles/issues/797) | 确认平台适配必须服务于训练/推理对齐、LoRA、低精度、agentic 和 CI，而不是独立 fork |
+| 硬件路线 | [#639 AMD Miles dev roadmap](https://github.com/radixark/miles/issues/639) | 按功能、性能、模型覆盖和 CI/CD 四条线组织 MUSA roadmap，为每项写责任人和目标 |
+| 新一轮 AMD 计划 | [#2025 Miles AMD Q3 Development](https://github.com/radixark/miles/issues/2025) | 把 Miles、SGLang、Megatron-Bridge、Transformer Engine、镜像和 CI 作为一条跨仓库依赖链管理 |
+| 模型真机记录 | [#1113 DeepSeek-V4 on ROCm](https://github.com/radixark/miles/issues/1113) | 学习记录 logprob 漂移、长序列通信失败、TP kernel 约束、colocate 泄漏和在线更新损坏等真实证据 |
+| 模型交付 | [#1046 DeepSeek V4 RL Roadmap](https://github.com/radixark/miles/issues/1046) | 裁剪模型只能验证基础设施；完整模型、锁定镜像、确切分支和命令才构成交付证据 |
+| 架构重构 | [#427 Miles Refactor Roadmap](https://github.com/radixark/miles/issues/427) | 把通用训练工具从 Megatron 专属路径拆出；MUSA 设备、通信和 RNG 也应下沉到公共平台接口 |
+| Rollout 协议 | [#712 Agentic server roadmap](https://github.com/radixark/miles/issues/712) | 平台基础稳定后，检查 MUSA 路径是否保持 token-in-token-out 和多轮轨迹契约 |
+| 低精度 | [#615 Blackwell MXFP8/NVFP4](https://github.com/radixark/miles/issues/615) | 学习如何把硬件特有精度做成独立 roadmap；不应将 FP8/FP4 塞进 MUSA 首版 bring-up |
+| 文档质量 | [#1481 Miles Docs Polish](https://github.com/radixark/miles/issues/1481) | 提供单节点可复现示例、事实核查、调试工具和贡献要求 |
+| 功能 tracker | [#2705 AMD LoRA RL tracker](https://github.com/radixark/miles/issues/2705) | 将 checkpoint、resume、同步、多 adapter、MoE 和 E2E 拆成可独立 review 的 PR，并标明合并顺序 |
+
+`roadmap` 搜索不会自动找到标题中没有该词的 tracker，因此不能只看 roadmap label；
+还应同时检查硬件 label、关联 PR、外部仓库 PR 和镜像配方。#639 与 #2025 有新旧和
+范围重叠，但上游没有声明后者取代前者；不应将两份清单的完成项简单相加。
+
+### 将 AMD 的真实问题转成 MUSA 验收项
+
+AMD 路线暴露的问题说明，“运行成功”并不是完整的异构支持结论。MUSA 必须额外验证：
+
+- **训练/推理数值对齐：**在 step 0、首次权重更新和 step N 使用固定 token，记录
+  trainer/rollout logprob 的 max/mean absolute diff；同时看绝对值和随时间的漂移，
+  阈值必须按模型、dtype 和完整模型实测后确定。
+- **极端 batch：**分别运行短、中位、最长和 truncated response，不能只用平均长度；
+  监控 MCCL timeout、expert 负载不均和峰值显存。
+- **并行和 kernel 支持矩阵：**为 TP/PP/EP、sequence length、dtype 和模型 shape 列出
+  `verified`/`unsupported`/`fallback`，不由一个 TP 配置推断其他配置可用。
+- **长稳和显存斜率：**除了记录峰值，还要记录每轮训练、rollout、pause/resume
+  后的已用显存；先证明 external/non-colocate 路径，再打开 colocate。
+- **权重传输格式：**对每个更新 tensor 记录名称、shape、逻辑 dtype、transport dtype、
+  byte length 和恢复后 hash。#1113 曾记录在线更新把 FP4 expert 字节当成
+  int8/uint8 恢复而损坏权重；API 返回成功不能代替 logits 对齐。
+- **精确恢复：**恢复检查不只是 model weight，还包括 optimizer/master weight、LR scheduler、
+  RNG、rollout ID 和 dataset cursor。恢复后的下一轮应与不中断对照运行一致。
+- **裁剪模型的边界：**小模型或 reduced-layer 模型可以证明调度和数据流能跑，
+  不能证明完整模型的 logprob、MoE、低精度或性能正确。
+- **CI 对等性：**建立 CUDA/ROCm/MUSA 同名测试集的 gap 表，区分“硬件不支持”、
+  “尚未移植”和“测试未接入 runner”，不用一个总通过数掩盖缺口。
+
+这些项目应分别属于平台基础、最小闭环、正确性、Megatron 和高级性能 PR，不应为了与
+AMD 的完整列表对齐而把 LoRA、FP8、colocate 提前到 MUSA 首版。
 
 ## 当前 Miles 的主要缺口
 
@@ -405,14 +457,31 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 | L1 MCCL | 两卡 collective 正确且无 hang |
 | L2 FSDP | 两卡完成两个 optimizer steps，loss/grad/参数有限 |
 | L3 SGLang | 外部 server 连续请求和 log-prob contract 正确 |
-| L4 权重更新 | 参数 hash 和固定输入 logits 在 trainer/rollout 对齐 |
+| L4 权重更新 | 参数 hash、dtype/shape/byte length 和固定输入 logits 在 trainer/rollout 对齐，且至少覆盖 step 0/1/N |
 | L5 RL smoke | 至少两个 rollout→train→update 周期完成 |
-| L6 多卡 | 目标卡数、TP/DP 和 checkpoint resume 通过 |
-| L7 稳定性 | 长稳运行无 NaN、无 collective timeout、无持续内存增长 |
+| L6 多卡 | 目标卡数、TP/DP 和 exact checkpoint resume 通过，恢复 model/optimizer/scheduler/RNG/rollout/dataset 状态 |
+| L7 稳定性 | 覆盖最长/truncated batch 的长稳运行，无 NaN、无 logprob 持续漂移、无 collective timeout、无持续内存增长 |
 | L8 性能 | 在完整环境和 workload 参数下报告吞吐、显存和时间分解 |
 
 没有真实 MUSA 机器日志时，只能报告代码审查、静态检查或“待执行命令”，不能把 L0-L8
 写成已通过。
+
+### 统一支持状态
+
+为了避免“支持”同时表示 import 成功、单卡 smoke 和生产可用，issue、PR 和文档统一使用：
+
+| 状态 | 含义 |
+| --- | --- |
+| `Planned` | 只有设计和验收目标，尚无可运行实现 |
+| `Patch available` | 有固定 base/patch commit，但未完成目标环境验证 |
+| `Import smoke passed` | 依赖可导入、设备可见；不表示训练可用 |
+| `Minimal loop passed` | 在明确硬件和配置上完成最小 rollout→train→update |
+| `Numerically verified` | 参数、logits/logprob、reward 和多轮更新满足明确误差标准 |
+| `Long-run verified` | 指定时长/步数和极端 batch 下无漂移、泄漏、hang 或损坏 |
+| `CI protected` | 同一验收进入 MUSA runner，失败会阻止回归合入 |
+
+每条验证记录至少包含 Miles/patch/依赖 commit、镜像、GPU 型号和数量、driver/SDK/
+torch_musa/MCCL、模型、dtype、TP/DP/EP、batch/sequence length、命令、成功标志和原始日志路径。
 
 ## patch 应该什么时候出现
 
@@ -438,3 +507,25 @@ Python patch 要验证 import 来源和实际启用状态。Miles 自身的修�
 
 这三个输入决定 Docker 基线、Python 版本和首个 CI suite，但不会改变“先 FSDP、再
 SGLang、最后 Megatron”的总体顺序。
+
+## 需要持续关注和学习的上游
+
+这个列表是为了发现接口和验收方法的变化，不是将其中的 AMD/CUDA 实现照搬到 MUSA：
+
+1. **Miles 公共架构：**跟踪 #427 及相关训练 backend 重构，优先复用通用 accelerator、
+   checkpoint 和 weight-update contract，避免新增 MUSA-only 业务分支。
+2. **AMD 问题记录：**定期对照 #639、#2025、#1113 和 #2705，关注新的数值、恢复、
+   低精度和长稳失败模式，并将平台无关的回归测试上游到 Miles。
+3. **SGLang MUSA：**跟踪安装文档、MUSA roadmap、权重更新协议、attention backend、
+   graph/IPC 和 CI 的真实支持矩阵；对 `sglang-miles` 与上游 `main` 分别记录 commit。
+4. **torch_musa 与 MCCL：**关注 PyTorch 版本对应、复合 process group、FSDP2、distributed
+   checkpoint、RNG 和 profiler 支持；任何版本升级都先重跑 L0-L4。
+5. **Slime 平台抽象：**继续学习 backend-aware API 和 capability probing，但用 Miles 自己的
+   Ray/FSDP/SGLang 调用链重新验证，不以 Slime CPU mock 结果代替真机证据。
+6. **Megatron 外部 patch：**跟踪 patch 的 base commit、更新日期、修改范围、上游化状态和
+   删除条件；维持“实验依赖”与“Miles 原生支持”两种状态。
+7. **文档与调试：**按 #1481 的思路维护单节点 quick start、环境采集、有界限的成功
+   日志、常见失败和过期复查日期，避免只保留一次性命令或整段刷屏日志。
+
+每次复查都回答五个问题：上游接口是否变化？外部 patch 是否还能应用？我们的成功结论
+对应哪个硬件和 commit？数值与长稳是否真正验证？哪些补丁已可删除或提交上游？
