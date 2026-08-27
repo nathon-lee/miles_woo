@@ -57,6 +57,7 @@ Miles 的 CUDA 专属优化。
 [`SGLang MUSA roadmap`](https://github.com/sgl-project/sglang/issues/16565)、
 [`Slime MUSA accelerator PR #2216`](https://github.com/THUDM/slime/pull/2216)、
 [`Slime SGLang compatibility PR #2286`](https://github.com/THUDM/slime/pull/2286)、
+[`Miles MUSA PR #1786`](https://github.com/radixark/miles/pull/1786)、
 [`megatron-lm-musa-patch`](https://sh-code.mthreads.com/ai/megatron-lm-musa-patch)、
 [`MT-MegatronLM`](https://github.com/MooreThreads/MT-MegatronLM)。
 
@@ -79,6 +80,45 @@ PR #2286 风格的 capability probing 兼容依赖版本，以外部 Megatron pa
 
 PR #2216 的 MUSA/MCCL 测试主要由 CPU mock、fake `torch.musa` 和 backend 字符串完成；
 Slime PR 合入状态只能作为代码设计证据，真实硬件能力仍需按本文验收阶梯重新验证。
+
+## PR #1786 的具体实现和可复用经验
+
+[Miles PR #1786](https://github.com/radixark/miles/pull/1786) 是一个可供实现层面学习的 MUSA 适配参考。
+本地审阅到它由 4 个连续提交组成，对应四个阶段：
+
+1. `bc74e1b9` 新增 `miles/utils/accelerator.py` 和 MUSA bootstrap；
+2. `b4585ec8` 将 FSDP、Ray、数据、内存、RNG、profile 和权重转换的设备操作路由 accelerator；
+3. `06f4e6b7` 将分布式权重更新的 `nccl` 转换为 MCCL，并改造 reloadable process group；
+4. `6680bfab` 处理 MUSA 运行时的可选依赖、旧版 SGLang 参数和 DeepSeek 编码器导入。
+
+### 值得保留的设计
+
+- **薄平台层：**用 `device()`、`device_type()`、`set_device()`、`synchronize()`、`empty_cache()`、
+  `memory_*()`、stream/event、RNG 和 `process_group_backend()` 统一包装设备行为，避免在每个
+  FSDP/Ray/模型文件里继续写 `torch.cuda.*`。
+- **后端名称与设备类型分离：**常规训练组映射为 `musa:mccl`，权重更新可使用
+  `cpu:gloo,musa:mccl`。这比在业务代码中散落的 `if musa` 更可维护。
+- **Ray 可见设备映射：**通过 `resolve_visible_device_id()` 处理 Ray 逻辑 ID 与可见设备索引，并将
+  `RAY_EXPERIMENTAL_NOSET_MUSA_VISIBLE_DEVICES` 放入保护列表。这与“Ray 申请 GPU 只是调度名称”的文档边界一致。
+- **分布式组可重建：**`reloadable_process_group` 在同一进程内缓存创建参数，允许权重更新后重建通信组。MUSA 适配不只是把 backend 字符串改成 `mccl`，还要验证组的生命周期、rank 映射和重建后的 barrier/broadcast。
+- **可选能力探测：**SGLang 权重更新的 `/begin_weight_update` 和 `/end_weight_update` 使用 route probing，旧版参数使用 `getattr` 兼容，DeepSeek encoder 使用延迟导入。这是应对多仓库版本漂移的好方式，但只能对可选功能跳过，不能跳过必需的权重和数值校验。
+- **非核心依赖延迟导入：**Muon、P2P weight transfer、SGLang dumper 和特定 encoder 不再在模块导入阶段强制要求，当用户真正请求时才报出带替代方案的错误。这对 MUSA 装配裁剪版依赖很有参考价值。
+
+### 这个 PR 不能直接复制的部分
+
+- PR 中的 accelerator 在 `import torch` 之后才尝试导入 `musa_patch`，与本文建议的“MUSA bootstrap 先于 SGLang/Megatron 执行”目标并不完全相同。应用前要用实际 `torch_musa`/外部 patch 验证导入顺序，否则可能已经错过运行时注入点。
+- `process_group_backend()` 和 `weight_update_backend()` 的映射以 `torch.musa.is_available()` 为基础，不是显式 `--hardware-platform` 配置。在 MUSA 环境中应拒绝静默回退，并把实际检测值打入环境报告。
+- `torch.distributed` 的 `new_group` 和 collective 被 monkey-patch 以兼容 `ReloadableProcessGroup`。这种方法可解决权重更新的特定问题，但会影响全进程通信 API；必须有集成测试、重复调用保证和明确的升级/移除计划。
+- SGLang 旧版未声明 route 时可跳过 begin/end 请求，这不能证明权重更新成功。MUSA 首版应把“未知的可选生命周期接口”与“必须保证的权重同步”分开，并记录 skip 原因。
+- PR 首要处理了依赖版本差异，但不包含完整的 MUSA 硬件日志、MCCL smoke、FSDP 两步、logits parity 或长稳数据。因此本文仍将它标记为 `Patch available` 参考，不升级为 `Minimal loop passed` 或 `Numerically verified`。
+
+### 对本文既有计划的调整
+
+PR #1786 证明原有阶段需补充三个实施任务：
+
+1. **加入能力矩阵：**除了 platform/device/backend，还要记录 SGLang route、Muon、P2P、dumper、DeepSeek encoder、stream/event、OOM observer 和各类低精度扩展是 `available`、`fallback` 还是 `unsupported`。
+2. **加入组重建测试：**L1 MCCL 之外，用同一进程创建、销毁、重建权重组，检查 barrier、broadcast、rank/world-size 与多轮 weight version 一致。
+3. **加入兼容性契约测试：**用旧、当前两套 SGLang/Megatron 依赖运行相同的 import、参数、route、checkpoint 和 weight-update smoke；可选能力可 warning+降级，必需能力必须 fail fast。
 
 ## 从 AMD/ROCm 路线图学什么
 
