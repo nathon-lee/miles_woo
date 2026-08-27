@@ -3,9 +3,10 @@ title: Miles 支持摩尔线程 MUSA 的设计与实施路线
 description: 基于当前 Miles、torch_musa、SGLang 和 Megatron-LM 现状设计 MUSA 支持，定义首版边界、代码改造和验收步骤。
 ---
 
-本文讨论的是**如何让目前尚未支持 MUSA 的 Miles 获得原生支持**。这里没有假设一份
-现成 patch 已经存在；patch 只是在外部依赖尚未合入修复时的临时交付方式，不是方案
-本身。
+本文讨论的是**如何让目前尚未支持 MUSA 的 Miles 获得原生支持**。摩尔线程已经在维护
+`megatron-lm-musa-patch`，Slime 也已经合入 MUSA accelerator 抽象和旧版 SGLang
+兼容修复；这些成果可以缩短 bring-up 时间，但不能直接证明 Miles 已经支持 MUSA。
+外部 patch 仍然是固定版本上的临时依赖，不是 Miles 平台设计本身。
 
 本文的仓库判断基于 Miles `f2b7c792`（2026-08-26 的 `main`）。依赖项目变化较快，
 实施前应重新锁定和验证 commit。
@@ -43,7 +44,9 @@ Miles 的 CUDA 专属优化。
 | `torch_musa` | 提供 `torch.musa`、`musa` device 和 `mccl` process group | 设备和通信无需在 Miles 内重造 |
 | `torchada` | 可把大量 CUDA PyTorch API 映射到 MUSA/MCCL | 可用于早期 bring-up，但不能代替 Miles 平台抽象和逐项测试 |
 | SGLang `main` | 已有 `all_musa` 依赖、`setup_musa.py`、MUSA 平台路径和 MUSA CI | MUSA 代码应来自上游；但 Miles 当前依赖 `sglang-miles`，必须先验证版本兼容或做最小 backport |
-| Megatron-LM | NVIDIA 上游没有可直接视为 Miles 兼容的 MUSA 后端 | 首版跳过 Megatron |
+| Slime `main` | 已合入 backend-aware accelerator 抽象和旧版 SGLang capability probing | 可复用设计和测试思路，但 Slime 的 CPU mock 测试不等于 Miles 真机通过 |
+| Megatron-LM | NVIDIA 上游没有可直接视为 Miles 兼容的 MUSA 后端 | 首版跳过 Megatron；可并行做外部 patch 可行性验证 |
+| `megatron-lm-musa-patch` | 摩尔线程维护基于固定 Megatron/Slime 版本的 patch 和 example，目前仍在修改 | 可作为实验依赖；必须锁定 patch 与被适配仓库的 commit，不能跟随浮动分支 |
 | MT-MegatronLM / MT-TransformerEngine | 摩尔线程提供基于固定 Megatron commit 的 patch/优化实现 | 后续可作为移植参考，不能直接假设兼容 Miles 的 `miles-main` |
 | Ray | 没有原生 MUSA accelerator resource | 需要显式声明逻辑 `GPU` 资源并补上 MUSA 可见设备映射 |
 
@@ -51,7 +54,30 @@ Miles 的 CUDA 专属优化。
 [`torchada`](https://github.com/MooreThreads/torchada)、
 [`SGLang MUSA 安装`](https://github.com/sgl-project/sglang/blob/main/docs/platforms/mthreads_gpu.md)、
 [`SGLang MUSA roadmap`](https://github.com/sgl-project/sglang/issues/16565)、
+[`Slime MUSA accelerator PR #2216`](https://github.com/THUDM/slime/pull/2216)、
+[`Slime SGLang compatibility PR #2286`](https://github.com/THUDM/slime/pull/2286)、
+[`megatron-lm-musa-patch`](https://sh-code.mthreads.com/ai/megatron-lm-musa-patch)、
 [`MT-MegatronLM`](https://github.com/MooreThreads/MT-MegatronLM)。
+
+## 从 Slime 两个 PR 得到的结论
+
+这两个 PR 不是互斥的两套完整适配方案：
+
+- PR #2216 是长期架构改造。它增加 accelerator 抽象，并覆盖设备、显存、Ray 可见设备
+  映射、profiler、process group、Megatron/SGLang 权重更新和部分模型/转换工具。MUSA 将
+  逻辑 `nccl` 映射为 `mccl`，权重更新组使用 `cpu:gloo,musa:mccl`。
+- PR #2286 只有旧版 SGLang 兼容修复：在新旧参数都不存在时 warning 后跳过，并在
+  `RouterArgs` 没有 `disable_health_check` 时避免直接访问。它本身不提供 MUSA backend。
+- `megatron-lm-musa-patch` 把尚未上游的 Megatron/MUSA 差异留在外部仓库。这样对 Slime
+  主线侵入较小，适合快速验证，但兼容性由 Slime、Megatron、SGLang 和 patch 的精确
+  commit 共同决定。
+
+因此 Miles 推荐组合使用这三类经验：以 PR #2216 风格的平台抽象作为长期边界，以
+PR #2286 风格的 capability probing 兼容依赖版本，以外部 Megatron patch 作为可删除、
+可锁版本的实验依赖。不能在入口全局映射 `torch.cuda` 后就把 Miles 标记为原生支持。
+
+PR #2216 的 MUSA/MCCL 测试主要由 CPU mock、fake `torch.musa` 和 backend 字符串完成；
+Slime PR 合入状态只能作为代码设计证据，真实硬件能力仍需按本文验收阶梯重新验证。
 
 ## 当前 Miles 的主要缺口
 
@@ -128,8 +154,20 @@ from miles.utils.accelerator import bootstrap_accelerator
 bootstrap_accelerator()
 ```
 
-MUSA bootstrap 负责加载 `torch_musa`；若首轮需要 `torchada`，也在此处条件导入，
-并把实际启用状态打印到日志。`torchada` 不能无条件影响 CUDA/ROCm 进程。
+MUSA bootstrap 负责加载 `torch_musa`。如果实验路径使用外部 `musa_patch`，应在显式选择
+MUSA 后、验证 `torch.musa` 前加载，并保证早于 Megatron、SGLang 和 CUDA/MUSA 扩展：
+
+```text
+选择 platform=musa
+  → 定位并加载固定 commit 的外部 musa_patch
+  → 验证 torch.musa 和 MCCL
+  → 导入 Megatron/SGLang
+  → 创建训练和权重更新 process group
+```
+
+patch 路径只用于定位依赖，不应单独触发静默平台切换。若首轮需要 `torchada`，也只在
+这里条件导入，并把实际启用状态打印到日志。`musa_patch` 和 `torchada` 都不能无条件
+影响 CUDA/ROCm 进程。
 
 参数 `--distributed-backend` 的默认值应从 `nccl` 改成 `auto`，解析完成后由平台解析成
 `nccl` 或 `mccl`。用户显式传值时保留覆盖能力。
@@ -162,7 +200,8 @@ Ray 的 `GPU` 在这里是**调度资源名称**，不代表底层设备是 CUDA
 - GPU 型号、每节点卡数；
 - driver、MUSA SDK/toolkit、muDNN、MCCL；
 - Python、torch、torch_musa、torchada；
-- SGLang commit、Miles commit；
+- SGLang commit、Miles commit；若使用外部路径，还要固定 Slime、Megatron-LM 和
+  `megatron-lm-musa-patch` commit；
 - 目标模型、dtype、attention backend。
 
 验收：`musaInfo` 正常，`torch.musa.device_count()` 等于可见卡数，单卡 tensor 运算通过，
@@ -208,6 +247,10 @@ attention、AdamW 非 fused 路径、单卡、短序列和两个 optimizer steps
 - 不启用 speculative decoding、PD disaggregation、HiCache 或量化；
 - 不做 weight update，只验证 prompt → tokens、log-prob 和 reward 数据契约。
 
+Miles 与 SGLang 的版本边界采用 capability probing，不只按版本字符串分支：优先检测
+实际参数、属性或函数签名，同时兼容 current/legacy 名称；可选能力不存在时打印一次
+明确 warning 并关闭对应功能。影响正确性的必需能力仍应 fail fast，不能静默跳过。
+
 验收：固定 prompt 的输出 shape、token IDs、finish reason 和 log-prob 都满足 Miles 的
 rollout contract，并连续完成至少 20 个请求。
 
@@ -222,8 +265,9 @@ rollout contract，并连续完成至少 20 个请求。
    `update_weights_from_disk`。它较慢，但没有 MCCL/设备组变量，最适合证明 step N 的
    参数确实影响 step N+1 的 rollout。
 2. **性能路径：MCCL broadcast。** 将 FSDP `UpdateWeightFromDistributed` 中写死的
-   `nccl` 改为平台 backend，对 trainer 和 SGLang 都传 `mccl`，从 1 trainer + 1
-   rollout rank 开始，再扩到 TP 和多节点。
+   `nccl` 改为平台 backend。纯设备 tensor 组使用 `mccl`；如果锁定版本的
+   `torch_musa` 支持复合 backend，可验证 `cpu:gloo,musa:mccl`，让 CPU 元数据和 MUSA
+   tensor 分别使用 Gloo/MCCL。从 1 trainer + 1 rollout rank 开始，再扩到 TP 和多节点。
 
 P2P、RDT 和 colocate 不应作为 MUSA 首版路径：它们当前分别依赖 Mooncake/NIXL、CUDA
 registration 或 CUDA IPC。必须有独立的 MUSA transport 证明后才能开放。
@@ -247,13 +291,16 @@ GPU 共享和内存 pause/resume。
 
 ### 阶段 5：Megatron MUSA
 
-只有 FSDP 端到端完成后再评估 Megatron。需要先建立一个三方兼容矩阵：
+Miles 的正式支持顺序仍是 FSDP-first；L0/L1 环境和 MCCL 通过后，可以并行进行一次
+外部 Megatron patch feasibility spike，但不能因此提前把 Megatron 标记为已支持。
+正式接入前建立兼容矩阵：
 
 ```text
 Miles commit
   + radixark/Megatron-LM miles-main commit
-  + MT-MegatronLM 可应用的基线 commit
-  + MT-TransformerEngine commit
+  + Megatron-LM 被适配的 base commit
+  + megatron-lm-musa-patch commit
+  + MT-MegatronLM/MT-TransformerEngine commit（如果使用）
   + torch/torch_musa/MUSA SDK/MCCL
 ```
 
@@ -288,7 +335,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 | checkpoint weight update | 目标支持 | 正确性优先的慢路径 |
 | MCCL broadcast | 下一步支持 | 在线训练所需性能路径 |
 | Miles 内部托管 SGLang | 后续 | 需要 Ray/MUSA 映射 |
-| Megatron | 暂不支持 | 等 FSDP 端到端后推进 |
+| Megatron | 暂不支持，可做外部 patch spike | 真机跑通只算实验结果，正式接入仍在 FSDP 路线之后 |
 | FP8/FP4、DeepEP、量化 | 暂不支持 | 需要供应商 kernel 和数值验证 |
 | colocate/offload | 暂不支持 | 当前依赖 CUDA IPC/torch_memory_saver |
 | P2P/RDT | 暂不支持 | 当前依赖 CUDA/NIXL/Mooncake 路径 |
@@ -343,6 +390,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 ### PR 7：Megatron MUSA
 
 - 单独维护依赖兼容矩阵；
+- 先以外部 `megatron-lm-musa-patch` 完成固定版本 feasibility spike；
 - 从 BF16 dense train-only 开始；
 - 再接权重转换、MCCL broadcast、MoE 和低精度。
 
@@ -368,15 +416,17 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ## patch 应该什么时候出现
 
-只有外部组件在锁定版本上确实缺少能力，而且修复尚未上游时，才添加 patch：
+只有外部组件在锁定版本上确实缺少能力，而且修复尚未上游时，才添加 patch。patch 可以
+随 Miles 镜像交付，也可以来自固定 commit 的外部仓库：
 
 ```text
 docker/musa_patch/<component>/<base-commit>/0001-<purpose>.patch
 ```
 
-每份 patch 必须绑定精确基线 commit、对应 issue/PR、`git apply --check`、测试命令和删除
-条件。Miles 自身的修改应直接以普通源代码 PR 提交，不要生成 `miles.patch` 再反向应用
-到同一仓库。
+每份 patch 必须绑定精确基线 commit、patch commit、对应 issue/PR、应用或导入顺序、
+修改文件清单、测试命令和删除条件。文件型 patch 还要执行 `git apply --check`；外部
+Python patch 要验证 import 来源和实际启用状态。Miles 自身的修改应直接以普通源代码 PR
+提交，不要生成 `miles.patch` 再反向应用到同一仓库。
 
 ## 实施前需要确认的三个输入
 
