@@ -61,6 +61,9 @@ Miles 的 CUDA 专属优化。
 [`megatron-lm-musa-patch`](https://sh-code.mthreads.com/ai/megatron-lm-musa-patch)、
 [`MT-MegatronLM`](https://github.com/MooreThreads/MT-MegatronLM)。
 
+准备提交到 Miles 上游的英文 roadmap Issue 草稿保存在
+`.github/issue-drafts/musa-support-roadmap.md`。
+
 ## 从 Slime 两个 PR 得到的结论
 
 这两个 PR 不是互斥的两套完整适配方案：
