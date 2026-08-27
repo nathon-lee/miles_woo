@@ -47,6 +47,19 @@ Related references:
 - [Slime MUSA accelerator PR #2216](https://github.com/THUDM/slime/pull/2216)
 - [Slime MUSA follow-up PR #2286](https://github.com/THUDM/slime/pull/2286)
 - [Miles AMD roadmap #639](https://github.com/radixark/miles/issues/639)
+- [Miles AMD Q3 development #2025](https://github.com/radixark/miles/issues/2025)
+- [DeepSeek-V4 on ROCm #1113](https://github.com/radixark/miles/issues/1113)
+- [Miles refactor roadmap #427](https://github.com/radixark/miles/issues/427)
+- [AMD LoRA RL tracker #2705](https://github.com/radixark/miles/issues/2705)
+- [Miles documentation polish #1481](https://github.com/radixark/miles/issues/1481)
+
+### Adjustments learned from PR #1786
+
+The existing implementation suggests three requirements that should be explicit in this roadmap:
+
+1. **Capability matrix:** In addition to platform, device, and backend selection, record whether SGLang routes, Muon, P2P transfer, the SGLang dumper, DeepSeek encoders, streams/events, OOM observers, and low-precision extensions are `available`, `fallback`, or `unsupported`.
+2. **Process-group reconstruction test:** In addition to the basic L1 MCCL test, create, destroy, and reconstruct the weight-update group in the same process. Verify barrier, broadcast, rank, world size, and multiple weight versions.
+3. **Compatibility contract tests:** Run the same import, argument, route, checkpoint, and weight-update smoke tests against the oldest supported and current pinned SGLang/Megatron dependency sets. Optional capabilities may warn and fall back; required capabilities must fail fast.
 
 ## Goals
 
@@ -210,6 +223,29 @@ Branch names below are suggestions for contributor forks.
   Suggested branch: `experiment/musa-megatron-spike`
 
   Keep this separate from the initial FSDP path. Begin with a fixed-version BF16 dense train-only feasibility test before attempting weight conversion, MoE, or low-precision support.
+
+## Cross-project tracking
+
+MUSA support depends on several fast-moving repositories. This issue should track the following items instead of treating the initial bring-up as a one-time port:
+
+1. **Miles shared architecture:** Follow #427 and related training-backend refactors. Reuse common accelerator, checkpoint, and weight-update contracts instead of adding MUSA-only business logic.
+2. **AMD findings:** Periodically review #639, #2025, #1113, and #2705 for new numerical, resume, low-precision, and stability failure modes. Upstream platform-independent regression tests to Miles where possible.
+3. **SGLang MUSA:** Track the installation guide, MUSA roadmap, weight-update protocol, attention backends, graph/IPC support, and hardware CI matrix. Record separate commits for `sglang-miles` and upstream SGLang `main`.
+4. **torch_musa and MCCL:** Track PyTorch compatibility, composite process groups, FSDP2, distributed checkpointing, RNG, and profiler support. Rerun L0-L4 after every dependency upgrade.
+5. **Slime platform abstraction:** Continue learning from its backend-aware APIs and capability probing, but revalidate the Miles Ray/FSDP/SGLang call chain. Slime CPU-mock results are not MUSA hardware evidence for Miles.
+6. **External Megatron patch:** Record its base commit, update date, patch scope, upstreaming status, and removal criteria. Keep `experimental dependency` separate from `native Miles support`.
+7. **Documentation and debugging:** Following #1481, maintain a single-node quick start, environment capture, bounded success logs, common failures, and a review date. Avoid preserving only one-off commands or unbounded raw logs.
+
+## Correctness and coverage requirements
+
+- **Trainer/rollout numerical alignment:** At step 0, after the first weight update, and at step N, run fixed tokens and record the maximum and mean absolute difference between trainer and rollout log probabilities. Track both the absolute difference and drift over time. Thresholds must be established on the complete model for each model and dtype.
+- **Extreme batches:** Test short, median, longest, and truncated responses rather than only an average length. Monitor MCCL timeouts, expert-load imbalance, and peak memory.
+- **Parallelism and kernel matrix:** Record `verified`, `fallback`, or `unsupported` for TP, PP, EP, sequence length, dtype, and model shape. One TP configuration must not imply support for other configurations.
+- **Stability and memory slope:** Record used memory after every training, rollout, and pause/resume phase, not only peak memory. Prove the external, non-colocated path before enabling colocation.
+- **Weight transport format:** For every updated tensor, record its name, shape, logical dtype, transport dtype, byte length, and restored hash. A successful API response is not a substitute for logits parity; #1113 documents corruption caused by restoring FP4 expert bytes as `int8`/`uint8`.
+- **Exact resume:** Validate model weights, optimizer/master weights, LR scheduler, RNG, rollout ID, and dataset cursor. The next iteration after resume should agree with an uninterrupted reference run.
+- **Reduced-model boundary:** A small or reduced-layer model can prove scheduling and data flow, but cannot prove full-model log-probability, MoE, low-precision, or performance correctness.
+- **CI parity:** Maintain a gap table for matching CUDA, ROCm, and MUSA test suites. Distinguish hardware limitations, unported functionality, and tests that are not connected to a runner instead of reporting only one aggregate pass count.
 
 ## Validation ladder
 
