@@ -440,6 +440,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 1：平台抽象
 
+- 推荐分支：`feat/musa-platform-abstraction`；
 - 新增 `miles/utils/accelerator.py`；
 - 增加 `--hardware-platform` 和 backend `auto`；
 - 定义 bootstrap 的导入顺序，确保 MUSA 初始化早于 SGLang、Megatron 和硬件扩展；
@@ -449,6 +450,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 2：FSDP MUSA train-only
 
+- 推荐分支：`feat/musa-fsdp-train-only`；
 - 改造 FSDP device mesh、模型搬运、data tensor、checkpoint 和 MUSA RNG；
 - 在 Ray train actor 中完成逻辑 GPU ID → `MUSA_VISIBLE_DEVICES` → local device 的映射；
 - 新增 `scripts/musa/run_qwen3_0_6b_fsdp_smoke.py`；
@@ -457,6 +459,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 3：MUSA 镜像与版本锁定
 
+- 推荐分支：`build/musa-runtime-image`；
 - 新增 `docker/Dockerfile.musa` 或固定的供应商基础镜像流程；
 - 固定 torch/torch_musa/SGLang/MUSA 组件版本；
 - 添加环境自检和镜像 smoke；
@@ -464,6 +467,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 4：外部 SGLang 与 checkpoint 权重更新
 
+- 推荐分支：`feat/musa-sglang-checkpoint-update`；
 - rollout-only contract test；
 - 新增 correctness-first checkpoint updater；
 - 用 capability probing 兼容锁定的 SGLang 版本，并区分可选 endpoint 与必需能力；
@@ -472,6 +476,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 5：MCCL 在线权重更新
 
+- 推荐分支：`feat/musa-mccl-online-weight-update`；
 - 将权重更新 backend 平台化，验证 `cpu:gloo,musa:mccl`；
 - 定义 trainer、单/多 rollout engine 的 group/rank/world-size 拓扑；
 - 使用可配置、可检查的非临时端口区间，并对端口冲突明确报错；
@@ -483,6 +488,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 6：Miles 内部托管 SGLang
 
+- 推荐分支：`feat/musa-managed-sglang`；
 - 为 SGLang engine 和子 actor 传播平台、visibility 和依赖环境；
 - 添加 scheduler/engine rank 与 MUSA device 唯一绑定测试；
 - 复用 PR 5 已验证的权重更新 contract，不在 actor bring-up 中重写通信协议；
@@ -491,6 +497,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 7：MUSA CI
 
+- 推荐分支：`ci/musa-hardware-smoke`；
 - 在 `tests/ci/ci_register.py` 增加 `register_musa_ci` 和 `HWBackend.MUSA`；
 - 在 `tests/ci/run_suite.py` 增加 MUSA suite；
 - 新增 MUSA workflow、runner 标签、镜像选择和日志采集；
@@ -499,6 +506,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 8：Megatron MUSA
 
+- 推荐分支：`experiment/musa-megatron-spike`；
 - 单独维护依赖兼容矩阵；
 - 先以外部 `megatron-lm-musa-patch` 完成固定版本 feasibility spike；
 - 从 BF16 dense train-only 开始；
