@@ -119,9 +119,9 @@ Slime PR 合入状态只能作为代码设计证据，真实硬件能力仍需�
 
 PR #1786 证明原有阶段需补充三个实施任务：
 
-1. **加入能力矩阵：**除了 platform/device/backend，还要记录 SGLang route、Muon、P2P、dumper、DeepSeek encoder、stream/event、OOM observer 和各类低精度扩展是 `available`、`fallback` 还是 `unsupported`。
-2. **加入组重建测试：**L1 MCCL 之外，用同一进程创建、销毁、重建权重组，检查 barrier、broadcast、rank/world-size 与多轮 weight version 一致。
-3. **加入兼容性契约测试：**用旧、当前两套 SGLang/Megatron 依赖运行相同的 import、参数、route、checkpoint 和 weight-update smoke；可选能力可 warning+降级，必需能力必须 fail fast。
+1. **加入能力矩阵：** 除了 platform/device/backend，还要记录 SGLang route、Muon、P2P、dumper、DeepSeek encoder、stream/event、OOM observer 和各类低精度扩展是 `available`、`fallback` 还是 `unsupported`。
+2. **加入组重建测试：** L1 MCCL 之外，用同一进程创建、销毁、重建权重组，检查 barrier、broadcast、rank/world-size 与多轮 weight version 一致。
+3. **加入兼容性契约测试：** 用旧、当前两套 SGLang/Megatron 依赖运行相同的 import、参数、route、checkpoint 和 weight-update smoke；可选能力可 warning+降级，必需能力必须 fail fast。
 
 ## 从 AMD/ROCm 路线图学什么
 
@@ -152,23 +152,23 @@ AMD 对 Miles 的支持已经从“设备能否启动”进入训练、rollout�
 
 AMD 路线暴露的问题说明，“运行成功”并不是完整的异构支持结论。MUSA 必须额外验证：
 
-- **训练/推理数值对齐：**在 step 0、首次权重更新和 step N 使用固定 token，记录
+- **训练/推理数值对齐：** 在 step 0、首次权重更新和 step N 使用固定 token，记录
   trainer/rollout logprob 的 max/mean absolute diff；同时看绝对值和随时间的漂移，
   阈值必须按模型、dtype 和完整模型实测后确定。
-- **极端 batch：**分别运行短、中位、最长和 truncated response，不能只用平均长度；
+- **极端 batch：** 分别运行短、中位、最长和 truncated response，不能只用平均长度；
   监控 MCCL timeout、expert 负载不均和峰值显存。
-- **并行和 kernel 支持矩阵：**为 TP/PP/EP、sequence length、dtype 和模型 shape 列出
+- **并行和 kernel 支持矩阵：** 为 TP/PP/EP、sequence length、dtype 和模型 shape 列出
   `verified`/`unsupported`/`fallback`，不由一个 TP 配置推断其他配置可用。
-- **长稳和显存斜率：**除了记录峰值，还要记录每轮训练、rollout、pause/resume
+- **长稳和显存斜率：** 除了记录峰值，还要记录每轮训练、rollout、pause/resume
   后的已用显存；先证明 external/non-colocate 路径，再打开 colocate。
-- **权重传输格式：**对每个更新 tensor 记录名称、shape、逻辑 dtype、transport dtype、
+- **权重传输格式：** 对每个更新 tensor 记录名称、shape、逻辑 dtype、transport dtype、
   byte length 和恢复后 hash。#1113 曾记录在线更新把 FP4 expert 字节当成
   int8/uint8 恢复而损坏权重；API 返回成功不能代替 logits 对齐。
-- **精确恢复：**恢复检查不只是 model weight，还包括 optimizer/master weight、LR scheduler、
+- **精确恢复：** 恢复检查不只是 model weight，还包括 optimizer/master weight、LR scheduler、
   RNG、rollout ID 和 dataset cursor。恢复后的下一轮应与不中断对照运行一致。
-- **裁剪模型的边界：**小模型或 reduced-layer 模型可以证明调度和数据流能跑，
+- **裁剪模型的边界：** 小模型或 reduced-layer 模型可以证明调度和数据流能跑，
   不能证明完整模型的 logprob、MoE、低精度或性能正确。
-- **CI 对等性：**建立 CUDA/ROCm/MUSA 同名测试集的 gap 表，区分“硬件不支持”、
+- **CI 对等性：** 建立 CUDA/ROCm/MUSA 同名测试集的 gap 表，区分“硬件不支持”、
   “尚未移植”和“测试未接入 runner”，不用一个总通过数掩盖缺口。
 
 这些项目应分别属于平台基础、最小闭环、正确性、Megatron 和高级性能 PR，不应为了与
@@ -582,19 +582,19 @@ SGLang、最后 Megatron”的总体顺序。
 
 这个列表是为了发现接口和验收方法的变化，不是将其中的 AMD/CUDA 实现照搬到 MUSA：
 
-1. **Miles 公共架构：**跟踪 #427 及相关训练 backend 重构，优先复用通用 accelerator、
+1. **Miles 公共架构：** 跟踪 #427 及相关训练 backend 重构，优先复用通用 accelerator、
    checkpoint 和 weight-update contract，避免新增 MUSA-only 业务分支。
-2. **AMD 问题记录：**定期对照 #639、#2025、#1113 和 #2705，关注新的数值、恢复、
+2. **AMD 问题记录：** 定期对照 #639、#2025、#1113 和 #2705，关注新的数值、恢复、
    低精度和长稳失败模式，并将平台无关的回归测试上游到 Miles。
-3. **SGLang MUSA：**跟踪安装文档、MUSA roadmap、权重更新协议、attention backend、
+3. **SGLang MUSA：** 跟踪安装文档、MUSA roadmap、权重更新协议、attention backend、
    graph/IPC 和 CI 的真实支持矩阵；对 `sglang-miles` 与上游 `main` 分别记录 commit。
-4. **torch_musa 与 MCCL：**关注 PyTorch 版本对应、复合 process group、FSDP2、distributed
+4. **torch_musa 与 MCCL：** 关注 PyTorch 版本对应、复合 process group、FSDP2、distributed
    checkpoint、RNG 和 profiler 支持；任何版本升级都先重跑 L0-L4。
-5. **Slime 平台抽象：**继续学习 backend-aware API 和 capability probing，但用 Miles 自己的
+5. **Slime 平台抽象：** 继续学习 backend-aware API 和 capability probing，但用 Miles 自己的
    Ray/FSDP/SGLang 调用链重新验证，不以 Slime CPU mock 结果代替真机证据。
-6. **Megatron 外部 patch：**跟踪 patch 的 base commit、更新日期、修改范围、上游化状态和
+6. **Megatron 外部 patch：** 跟踪 patch 的 base commit、更新日期、修改范围、上游化状态和
    删除条件；维持“实验依赖”与“Miles 原生支持”两种状态。
-7. **文档与调试：**按 #1481 的思路维护单节点 quick start、环境采集、有界限的成功
+7. **文档与调试：** 按 #1481 的思路维护单节点 quick start、环境采集、有界限的成功
    日志、常见失败和过期复查日期，避免只保留一次性命令或整段刷屏日志。
 
 每次复查都回答五个问题：上游接口是否变化？外部 patch 是否还能应用？我们的成功结论
