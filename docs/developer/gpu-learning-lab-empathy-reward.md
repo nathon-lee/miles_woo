@@ -345,3 +345,5 @@ Miles 提供 `miles.utils.debug_utils.replay_reward_fn` 用于对已保存的 ro
 - backward、optimizer step、权重同步和第二轮 rollout；
 - 训练能改善这些回复。
 
+如果要从 rollout-only 继续学习完整的 backward、checkpoint 和训练后权重同步，
+可参考[单卡沉没成本决策 RL 成功实测](/developer/gpu-learning-lab-sunk-cost-training)。
