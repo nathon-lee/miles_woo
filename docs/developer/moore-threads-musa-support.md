@@ -93,16 +93,16 @@ Slime PR 合入状态只能作为代码设计证据，真实硬件能力仍需�
 
 ### 值得保留的设计
 
-- **薄平台层：**用 `device()`、`device_type()`、`set_device()`、`synchronize()`、`empty_cache()`、
+- **薄平台层：** 用 `device()`、`device_type()`、`set_device()`、`synchronize()`、`empty_cache()`、
   `memory_*()`、stream/event、RNG 和 `process_group_backend()` 统一包装设备行为，避免在每个
   FSDP/Ray/模型文件里继续写 `torch.cuda.*`。
-- **后端名称与设备类型分离：**常规训练组映射为 `musa:mccl`，权重更新可使用
+- **后端名称与设备类型分离：** 常规训练组映射为 `musa:mccl`，权重更新可使用
   `cpu:gloo,musa:mccl`。这比在业务代码中散落的 `if musa` 更可维护。
-- **Ray 可见设备映射：**通过 `resolve_visible_device_id()` 处理 Ray 逻辑 ID 与可见设备索引，并将
+- **Ray 可见设备映射：** 通过 `resolve_visible_device_id()` 处理 Ray 逻辑 ID 与可见设备索引，并将
   `RAY_EXPERIMENTAL_NOSET_MUSA_VISIBLE_DEVICES` 放入保护列表。这与“Ray 申请 GPU 只是调度名称”的文档边界一致。
-- **分布式组可重建：**`reloadable_process_group` 在同一进程内缓存创建参数，允许权重更新后重建通信组。MUSA 适配不只是把 backend 字符串改成 `mccl`，还要验证组的生命周期、rank 映射和重建后的 barrier/broadcast。
-- **可选能力探测：**SGLang 权重更新的 `/begin_weight_update` 和 `/end_weight_update` 使用 route probing，旧版参数使用 `getattr` 兼容，DeepSeek encoder 使用延迟导入。这是应对多仓库版本漂移的好方式，但只能对可选功能跳过，不能跳过必需的权重和数值校验。
-- **非核心依赖延迟导入：**Muon、P2P weight transfer、SGLang dumper 和特定 encoder 不再在模块导入阶段强制要求，当用户真正请求时才报出带替代方案的错误。这对 MUSA 装配裁剪版依赖很有参考价值。
+- **分布式组可重建：** `reloadable_process_group` 在同一进程内缓存创建参数，允许权重更新后重建通信组。MUSA 适配不只是把 backend 字符串改成 `mccl`，还要验证组的生命周期、rank 映射和重建后的 barrier/broadcast。
+- **可选能力探测：** SGLang 权重更新的 `/begin_weight_update` 和 `/end_weight_update` 使用 route probing，旧版参数使用 `getattr` 兼容，DeepSeek encoder 使用延迟导入。这是应对多仓库版本漂移的好方式，但只能对可选功能跳过，不能跳过必需的权重和数值校验。
+- **非核心依赖延迟导入：** Muon、P2P weight transfer、SGLang dumper 和特定 encoder 不再在模块导入阶段强制要求，当用户真正请求时才报出带替代方案的错误。这对 MUSA 装配裁剪版依赖很有参考价值。
 
 ### 这个 PR 不能直接复制的部分
 
@@ -440,6 +440,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 1：平台抽象
 
+- 推荐分支：`feat/musa-platform-abstraction`；
 - 新增 `miles/utils/accelerator.py`；
 - 增加 `--hardware-platform` 和 backend `auto`；
 - 定义 bootstrap 的导入顺序，确保 MUSA 初始化早于 SGLang、Megatron 和硬件扩展；
@@ -449,6 +450,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 2：FSDP MUSA train-only
 
+- 推荐分支：`feat/musa-fsdp-train-only`；
 - 改造 FSDP device mesh、模型搬运、data tensor、checkpoint 和 MUSA RNG；
 - 在 Ray train actor 中完成逻辑 GPU ID → `MUSA_VISIBLE_DEVICES` → local device 的映射；
 - 新增 `scripts/musa/run_qwen3_0_6b_fsdp_smoke.py`；
@@ -457,6 +459,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 3：MUSA 镜像与版本锁定
 
+- 推荐分支：`build/musa-runtime-image`；
 - 新增 `docker/Dockerfile.musa` 或固定的供应商基础镜像流程；
 - 固定 torch/torch_musa/SGLang/MUSA 组件版本；
 - 添加环境自检和镜像 smoke；
@@ -464,6 +467,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 4：外部 SGLang 与 checkpoint 权重更新
 
+- 推荐分支：`feat/musa-sglang-checkpoint-update`；
 - rollout-only contract test；
 - 新增 correctness-first checkpoint updater；
 - 用 capability probing 兼容锁定的 SGLang 版本，并区分可选 endpoint 与必需能力；
@@ -472,6 +476,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 5：MCCL 在线权重更新
 
+- 推荐分支：`feat/musa-mccl-online-weight-update`；
 - 将权重更新 backend 平台化，验证 `cpu:gloo,musa:mccl`；
 - 定义 trainer、单/多 rollout engine 的 group/rank/world-size 拓扑；
 - 使用可配置、可检查的非临时端口区间，并对端口冲突明确报错；
@@ -483,6 +488,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 6：Miles 内部托管 SGLang
 
+- 推荐分支：`feat/musa-managed-sglang`；
 - 为 SGLang engine 和子 actor 传播平台、visibility 和依赖环境；
 - 添加 scheduler/engine rank 与 MUSA device 唯一绑定测试；
 - 复用 PR 5 已验证的权重更新 contract，不在 actor bring-up 中重写通信协议；
@@ -491,6 +497,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 7：MUSA CI
 
+- 推荐分支：`ci/musa-hardware-smoke`；
 - 在 `tests/ci/ci_register.py` 增加 `register_musa_ci` 和 `HWBackend.MUSA`；
 - 在 `tests/ci/run_suite.py` 增加 MUSA suite；
 - 新增 MUSA workflow、runner 标签、镜像选择和日志采集；
@@ -499,6 +506,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ### PR 8：Megatron MUSA
 
+- 推荐分支：`experiment/musa-megatron-spike`；
 - 单独维护依赖兼容矩阵；
 - 先以外部 `megatron-lm-musa-patch` 完成固定版本 feasibility spike；
 - 从 BF16 dense train-only 开始；
