@@ -28,6 +28,7 @@ from megatron.training.training import get_model
 from miles.backends.megatron_utils.ft.indep_dp import allreduce_grads_and_losses_across_replicas
 from miles.backends.megatron_utils.ft.types import TrainStepOutcome
 from miles.backends.megatron_utils.local_weight_checksum import dump_local_weight_checksums
+from miles.utils import accelerator
 from miles.utils.audit_utils.witness.allocator import WitnessInfo
 from miles.utils.audit_utils.witness.module import witness_dump_and_clear_stale
 from miles.utils.dumper_utils import DumperMegatronUtil, DumperPhase
@@ -658,8 +659,8 @@ def train_one_step(
 
 def finalize_model_grads_with_empty_cache(*args, **kwargs):
     # TODO: this is an ad-hoc method and we should figure out why the oom happens in the first place.
-    device = torch.cuda.current_device()
-    free, total = torch.cuda.mem_get_info(device)
+    device = accelerator.current_device()
+    free, total = accelerator.mem_get_info(device)
     if free / total < 0.1:
         clear_memory()
     from .lora_utils import reduce_marked_lora_grads

@@ -24,6 +24,23 @@ MEGATRON_TP_SIZE = 1
 MEGATRON_PP_SIZE = 1
 
 
+def _is_musa_mode() -> bool:
+    requested = os.environ.get("MILES_HARDWARE_PLATFORM", "auto").lower()
+    return requested == "musa" or any(
+        name in os.environ for name in ("MUSA_VISIBLE_DEVICES", "MTHREADS_VISIBLE_DEVICES", "MUSA_PATCH_PATH")
+    )
+
+
+def _runtime_env() -> dict[str, str]:
+    if not _is_musa_mode():
+        return {}
+    env = {"MILES_HARDWARE_PLATFORM": "musa"}
+    for name in ("MUSA_VISIBLE_DEVICES", "MTHREADS_VISIBLE_DEVICES", "MUSA_PATCH_PATH"):
+        if value := os.environ.get(name):
+            env[name] = value
+    return env
+
+
 def prepare():
     U.exec_command_cpu("mkdir -p /root/models /root/datasets")
     U.exec_command_cpu(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
@@ -38,6 +55,7 @@ def prepare():
 
 
 def execute():
+    musa_mode = _is_musa_mode()
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/"
 
     rollout_args = (
@@ -78,10 +96,14 @@ def execute():
     sglang_args = (
         "--rollout-num-gpus-per-engine 1 " "--sglang-chunked-prefill-size 4096 " "--sglang-mem-fraction-static 0.75 "
     )
+    if musa_mode:
+        sglang_args += "--sglang-disable-cuda-graph "
 
     ci_args = "--ci-test "
 
     misc_args = "--actor-num-nodes 1 " "--colocate " f"--actor-num-gpus-per-node {NUM_GPUS} "
+    if musa_mode:
+        misc_args += "--hardware-platform musa --distributed-backend mccl "
 
     train_args = (
         f"{ckpt_args} "
@@ -99,18 +121,22 @@ def execute():
 
     fsdp_args = (
         "--train-backend fsdp "
-        "--attn-implementation flash_attention_2 "
+        f"--attn-implementation {'eager' if musa_mode else 'flash_attention_2'} "
         "--gradient-checkpointing "
         f"--context-parallel-size {CP_SIZE} "
         f"--update-weight-buffer-size {512 * 1024 * 1024} "
-        """--train-env-vars '{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}' """
     )
+    if not musa_mode:
+        fsdp_args += """--train-env-vars '{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}' """
+
+    runtime_env = _runtime_env()
 
     try:
         U.execute_train(
             train_args=train_args + (f"{fsdp_args}" f"--save-debug-rollout-data {debug_data_path} "),
             num_gpus_per_node=NUM_GPUS,
             megatron_model_type=None,
+            extra_env_vars=runtime_env,
         )
 
         U.execute_train(
@@ -123,6 +149,7 @@ def execute():
             ),
             num_gpus_per_node=NUM_GPUS,
             megatron_model_type=None,
+            extra_env_vars=runtime_env,
         )
 
         U.execute_train(
@@ -145,11 +172,12 @@ def execute():
                 "--hidden-dropout 0.0 "
                 "--accumulate-allreduce-grads-in-fp32 "
                 "--attention-softmax-in-fp32 "
-                "--attention-backend flash "
+                f"--attention-backend {'auto' if musa_mode else 'flash'} "
                 "--debug-train-only "
             ),
             num_gpus_per_node=NUM_GPUS,
             megatron_model_type=MODEL_TYPE,
+            extra_env_vars=runtime_env,
         )
 
     finally:

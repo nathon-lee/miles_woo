@@ -9,6 +9,8 @@ from dataclasses import dataclass
 
 import torch
 
+from miles.utils import accelerator
+
 
 @dataclass
 class PrecisionPolicy:
@@ -49,7 +51,7 @@ def resolve_precision_policy(hf_config, args) -> PrecisionPolicy:
 def precision_forward_context(policy: PrecisionPolicy):
     if policy.autocast_dtype is None:
         return nullcontext()
-    return torch.autocast(device_type="cuda", dtype=policy.autocast_dtype)
+    return accelerator.autocast(dtype=policy.autocast_dtype)
 
 
 def apply_fp32_master(

@@ -15,7 +15,7 @@ from torch_memory_saver import torch_memory_saver
 from miles.backends.megatron_utils.rematerialize_utils import build_main_cast_context
 from miles.dashboard import hooks as dashboard_hooks
 from miles.ray.train_actor import TrainRayActor
-from miles.utils import train_dump_utils
+from miles.utils import accelerator, train_dump_utils
 from miles.utils.argparse_utils import inplace_modify_args
 from miles.utils.audit_utils.event_logger.logger import event_logger_context
 from miles.utils.audit_utils.witness.allocator import WitnessInfo
@@ -553,7 +553,7 @@ class MegatronTrainRayActor(TrainRayActor):
                             "paired with a pp-last-stage actor rank must have shipped 'values'"
                         )
                         rollout_data["values"] = [
-                            value.to(device=torch.cuda.current_device(), non_blocking=True)
+                            value.to(device=accelerator.device(), non_blocking=True)
                             for value in ray.get(values_ref.inner)
                         ]
                 if self._active_model_tag != "actor":
@@ -599,7 +599,7 @@ class MegatronTrainRayActor(TrainRayActor):
             if self._enable_weight_backup:
                 self.weights_backuper.backup("actor")
             else:
-                torch.cuda.synchronize()
+                accelerator.synchronize()
 
             # Update ref model if needed
             if (

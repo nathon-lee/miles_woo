@@ -5,6 +5,7 @@ import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 
 from miles.backends.training_utils.parallel import ParallelState
+from miles.utils import accelerator
 from miles.utils.distributed_utils import get_gloo_group
 from miles.utils.ft_utils.process_group_utils import GroupInfo
 
@@ -49,7 +50,7 @@ def create_fsdp_parallel_state(args: Namespace) -> ParallelState:
     rank = dist.get_rank()
 
     meshes = build_fsdp_meshes(
-        device_type="cuda",
+        device_type=accelerator.device_type(),
         world_size=world_size,
         dp_replicate_size=args.dp_replicate_size,
     )

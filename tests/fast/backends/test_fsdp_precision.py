@@ -15,6 +15,7 @@ from miles.backends.fsdp_utils.adaptations.precision import (
 from miles.backends.fsdp_utils.arguments import load_fsdp_args, parse_fsdp_cli
 from miles.backends.training_utils.data import _rollout_logprob_dtype
 from miles.true_on_policy.contracts import QWEN3_DENSE_TRUE_ON_POLICY_V1
+from miles.utils import accelerator
 
 
 def test_resolve_precision_policy_uses_independent_fp32_master_switch_and_dtypes():
@@ -123,7 +124,8 @@ def test_qwen3_formal_true_on_policy_rejects_disabled_fp32_master():
         )
 
 
-def test_precision_forward_context_uses_policy_autocast(monkeypatch):
+@pytest.mark.parametrize("device_type", ["cuda", "musa"])
+def test_precision_forward_context_uses_active_device_type(monkeypatch, device_type):
     entered = []
 
     @contextmanager
@@ -132,6 +134,7 @@ def test_precision_forward_context_uses_policy_autocast(monkeypatch):
         yield
 
     monkeypatch.setattr(torch, "autocast", fake_autocast)
+    monkeypatch.setattr(accelerator, "device_type", lambda: device_type)
     policy = resolve_precision_policy(
         SimpleNamespace(model_type="qwen3"),
         SimpleNamespace(
@@ -145,7 +148,7 @@ def test_precision_forward_context_uses_policy_autocast(monkeypatch):
     with precision_forward_context(policy):
         pass
 
-    assert entered == [("cuda", torch.bfloat16)]
+    assert entered == [(device_type, torch.bfloat16)]
 
 
 def test_apply_fp32_master_records_sync_dtypes_before_cast():

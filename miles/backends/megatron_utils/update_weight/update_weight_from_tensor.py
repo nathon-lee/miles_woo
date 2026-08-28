@@ -18,6 +18,7 @@ from miles.backends.megatron_utils.lora_utils import (
     lora_base_cpu_backup_enabled,
 )
 from miles.backends.training_utils.parallel import get_parallel_state
+from miles.utils import accelerator
 from miles.utils.distributed_utils import get_gloo_group
 from miles.utils.lora import LORA_ADAPTER_NAME
 
@@ -44,7 +45,7 @@ def _pp_assemble_full_adapter(
         return hf_named_tensors
     pp_rank = dist.get_rank(group=pp_group)
     global_ranks = dist.get_process_group_ranks(pp_group)
-    device = torch.cuda.current_device()
+    device = accelerator.device()
 
     local_meta = [(n, tuple(t.shape), t.dtype) for n, t in hf_named_tensors]
     all_meta: list = [None] * pp_size
@@ -273,9 +274,7 @@ class UpdateWeightFromTensor:
 
             mm_tower_tensors = self._mm_tower_named_tensors()
             if mm_tower_tensors is not None:
-                mm_tower_tensors = [
-                    (name, tensor.to(torch.cuda.current_device())) for name, tensor in mm_tower_tensors
-                ]
+                mm_tower_tensors = [(name, tensor.to(accelerator.device())) for name, tensor in mm_tower_tensors]
                 refs, long_lived_tensors = self._send_base_params(mm_tower_tensors)
                 results = ray.get(refs)
                 _check_weight_sync_results(results, is_lora=False)
@@ -305,8 +304,8 @@ class UpdateWeightFromTensor:
             _check_weight_sync_results(results, is_lora=True)
             del long_lived_tensors
             del accumulated_named_tensors
-            torch.cuda.ipc_collect()
-            torch.cuda.empty_cache()
+            accelerator.ipc_collect()
+            accelerator.empty_cache()
 
             if not self._lora_base_synced:
                 self._lora_base_synced = True
@@ -414,7 +413,7 @@ class UpdateWeightFromTensor:
 def _repack_onto_fresh_storage(
     named_tensors: list[tuple[str, torch.Tensor]],
 ) -> dict[str, torch.Tensor]:
-    """Copy CUDA tensors into freshly allocated flat buffers and return views onto them.
+    """Copy accelerator tensors into freshly allocated flat buffers and return views onto them.
 
     ``torch_memory_saver.region()`` is a ``torch.cuda.use_mem_pool`` context, so anything
     allocated while building the model -- the LoRA adapter parameters included -- lives in
@@ -431,7 +430,7 @@ def _repack_onto_fresh_storage(
     """
     groups: dict[tuple[torch.dtype, torch.device], list[tuple[str, torch.Tensor]]] = {}
     for name, tensor in named_tensors:
-        if tensor.is_cuda:
+        if tensor.device.type == accelerator.device_type():
             groups.setdefault((tensor.dtype, tensor.device), []).append((name, tensor))
 
     views: dict[str, torch.Tensor] = {}

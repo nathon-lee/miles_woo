@@ -97,6 +97,11 @@ def test_explicit_backend_is_preserved():
     assert accelerator.process_group_backend(backend="gloo", platform="musa") == "gloo"
 
 
+def test_musa_weight_update_backend_includes_cpu_and_device_backends():
+    assert accelerator.weight_update_backend(platform="musa") == "cpu:gloo,musa:mccl"
+    assert accelerator.weight_update_backend(platform="cuda") == "nccl"
+
+
 def test_explicit_musa_request_fails_when_runtime_is_unavailable(monkeypatch):
     monkeypatch.setattr(accelerator, "_load_musa_runtime", lambda: None)
     monkeypatch.setattr(accelerator, "is_musa_available", lambda: False)
@@ -150,6 +155,12 @@ def test_visible_device_mapping_accepts_physical_and_local_ids(monkeypatch):
 
     with pytest.raises(RuntimeError, match="MUSA_VISIBLE_DEVICES='4,7'"):
         accelerator.resolve_visible_device_id(9, platform="musa")
+
+
+def test_visible_device_mapping_accepts_all(monkeypatch):
+    monkeypatch.setenv("MUSA_VISIBLE_DEVICES", "all")
+
+    assert accelerator.resolve_visible_device_id(7, platform="musa") == 7
 
 
 def test_runtime_summary_records_requested_and_active_platform(monkeypatch):

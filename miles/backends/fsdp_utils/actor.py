@@ -22,7 +22,7 @@ from miles.backends.training_utils.log_utils import (
 from miles.backends.training_utils.loss import compute_advantages_and_returns, get_log_probs_and_entropy, loss_function
 from miles.backends.training_utils.parallel import get_parallel_state, set_parallel_state
 from miles.ray.train_actor import TrainRayActor
-from miles.utils import train_dump_utils, train_metric_utils
+from miles.utils import accelerator, train_dump_utils, train_metric_utils
 from miles.utils.context_utils import with_defer
 from miles.utils.distributed_utils import get_gloo_group
 from miles.utils.flops_utils import flops_args_from_hf_config, fwd_tflops_per_gpu
@@ -296,10 +296,10 @@ class FSDPTrainRayActor(TrainRayActor):
 
         # Rank 0: move with weights, others: allocate empty tensors on device
         if dist.get_rank() == 0:
-            model = model.to(device=torch.cuda.current_device(), non_blocking=True)
+            model = model.to(device=accelerator.device(), non_blocking=True)
         else:
             # to_empty creates tensors on device without initializing memory
-            model = model.to_empty(device=torch.cuda.current_device())
+            model = model.to_empty(device=accelerator.device())
 
         is_cpu_offload = cpu_offload is not None
         options = StateDictOptions(full_state_dict=True, cpu_offload=is_cpu_offload, broadcast_from_rank0=True)
@@ -313,13 +313,13 @@ class FSDPTrainRayActor(TrainRayActor):
         if is_cpu_offload:
             model.to("cpu", non_blocking=True)
             for buf in model.buffers():
-                buf.data = buf.data.to(torch.cuda.current_device())
+                buf.data = buf.data.to(accelerator.device())
 
         return model
 
     @timer
     def sleep(self) -> None:
-        """Pause CUDA memory for all tracked tensors."""
+        """Pause accelerator memory for all tracked tensors."""
         if not self.args.offload_train:
             return
 
@@ -333,12 +333,12 @@ class FSDPTrainRayActor(TrainRayActor):
 
     @timer
     def wake_up(self) -> None:
-        """Resume CUDA memory for all tracked tensors."""
+        """Resume accelerator memory for all tracked tensors."""
         if not self.args.offload_train:
             return
 
-        self.model.cuda()
-        move_torch_optimizer(self.optimizer, "cuda")
+        self.model.to(accelerator.device())
+        move_torch_optimizer(self.optimizer, accelerator.device())
         dist.barrier(group=get_gloo_group())
         print_memory("after wake_up model")
 
@@ -362,7 +362,7 @@ class FSDPTrainRayActor(TrainRayActor):
         if model_tag == "ref" and self.ref_model is not None:
             if not self.fsdp_cpu_offload:
                 self.model.cpu()
-                torch.cuda.empty_cache()
+                accelerator.empty_cache()
                 dist.barrier(group=get_gloo_group())
 
             active_model = self.ref_model
@@ -429,11 +429,11 @@ class FSDPTrainRayActor(TrainRayActor):
         finally:
             # Restore actor model if it was offloaded
             if model_tag == "ref" and self.ref_model is not None:
-                torch.cuda.empty_cache()
+                accelerator.empty_cache()
                 dist.barrier(group=get_gloo_group())
 
                 if not self.fsdp_cpu_offload:
-                    self.model.cuda()
+                    self.model.to(accelerator.device())
                     dist.barrier(group=get_gloo_group())
 
     def train(
@@ -711,7 +711,7 @@ def move_torch_optimizer(optimizer, device):
                 if isinstance(value, torch.Tensor):
                     state[key] = value.to(device, non_blocking=True)
 
-    torch.cuda.synchronize()
+    accelerator.synchronize()
 
 
 def apply_fsdp2(model, mesh=None, cpu_offload=False, args=None, param_dtype=None, reduce_dtype=None):

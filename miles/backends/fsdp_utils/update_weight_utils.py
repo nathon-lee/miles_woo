@@ -17,6 +17,7 @@ except ImportError:
 
 from sglang.srt.utils import MultiprocessingSerializer
 
+from miles.utils import accelerator
 from miles.utils.distributed_utils import get_gloo_group, init_process_group
 
 try:
@@ -216,7 +217,7 @@ class UpdateWeightFromTensor(UpdateWeight):
 
 
 class UpdateWeightFromDistributed(UpdateWeight):
-    """Broadcast weights via a temporary NCCL group to rollout engines."""
+    """Broadcast weights via a temporary accelerator process group to rollout engines."""
 
     def connect_rollout_engines(
         self,
@@ -225,13 +226,14 @@ class UpdateWeightFromDistributed(UpdateWeight):
         engine_gpu_counts: Sequence[int] | None = None,
         engine_gpu_offsets: Sequence[int] | None = None,
     ) -> None:
-        """On rank 0, initialize a temporary NCCL group for parameter broadcast."""
+        """On rank 0, initialize a temporary process group for parameter broadcast."""
         self.rollout_engines = rollout_engines
         self.rollout_engine_lock = rollout_engine_lock
 
         # TP weight sync: AllGather params to rank 0, then broadcast from rank 0 to all sglang engines
         self._is_src_rank = dist.get_rank() == 0
         if self._is_src_rank:
+            backend = accelerator.process_group_backend()
             self._group_name = "miles"
             master_address = ray._private.services.get_node_ip_address()
             with socket.socket() as sock:
@@ -247,12 +249,12 @@ class UpdateWeightFromDistributed(UpdateWeight):
                     i * self.args.rollout_num_gpus_per_engine + 1,
                     world_size,
                     self._group_name,
-                    backend="nccl",
+                    backend=backend,
                 )
                 for i, engine in enumerate(self.rollout_engines)
             ]
             self._model_update_groups = init_process_group(
-                backend="nccl",
+                backend=backend,
                 init_method=f"tcp://{master_address}:{master_port}",
                 world_size=world_size,
                 rank=0,
@@ -278,8 +280,8 @@ class UpdateWeightFromDistributed(UpdateWeight):
         ]
 
         handles = []
-        # free cached blocks once before the batch (per-param empty_cache was a costly CUDA sync and ineffective)
-        torch.cuda.empty_cache()
+        # Free cached blocks once before the batch; doing this per parameter introduces a costly sync.
+        accelerator.empty_cache()
         for _name, param in named_tensors:
             param_data = param.data.contiguous()
 

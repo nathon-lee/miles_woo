@@ -11,6 +11,7 @@ from ray.actor import ActorHandle
 from tqdm import tqdm
 
 from miles.backends.training_utils.parallel import get_parallel_state
+from miles.utils import accelerator
 from miles.utils.distributed_utils import init_process_group
 
 from miles.utils.lora import LORA_ADAPTER_NAME
@@ -20,7 +21,7 @@ from .mixin import DistBucketedWeightUpdateMixin
 
 class UpdateWeightFromDistributed(DistBucketedWeightUpdateMixin):
     """
-    Update distributed engines via NCCL. Each PP rank: group "miles-pp_{pp_rank}",
+    Update distributed engines through the active accelerator backend. Each PP rank: group "miles-pp_{pp_rank}",
     only DP=TP=0 broadcasts. Non-expert (TP) and expert (EP) params separate.
     """
 
@@ -68,7 +69,7 @@ class UpdateWeightFromDistributed(DistBucketedWeightUpdateMixin):
         engine_gpu_offsets: Sequence[int] | None = None,
     ) -> None:
         """
-        Create NCCL "miles-pp_{pp_rank}" if PP source (DP=TP=0). Lock prevents concurrent broadcasts.
+        Create the "miles-pp_{pp_rank}" group if PP source (DP=TP=0). Lock prevents concurrent broadcasts.
         """
         self.rollout_engines = rollout_engines
         self._connection_stale = False
@@ -205,7 +206,7 @@ def connect_rollout_engines_from_distributed(
     engine_gpu_counts: Sequence[int] | None = None,
 ) -> dist.ProcessGroup:
     """
-    Create NCCL group: training rank 0 + all engine GPUs. Blocks until joined.
+    Create a weight-sync group with training rank 0 and all engine devices. Blocks until joined.
 
     ``engine_gpu_counts`` gives the number of GPUs per engine.  When engines
     have heterogeneous TP sizes (e.g. prefill TP=2, decode TP=4), each engine
@@ -218,6 +219,7 @@ def connect_rollout_engines_from_distributed(
         sock.bind(("", 0))
         master_port = sock.getsockname()[1]
     world_size = sum(engine_gpu_counts) + 1
+    backend = accelerator.weight_update_backend()
 
     refs = []
     rank_cursor = 1
@@ -229,12 +231,12 @@ def connect_rollout_engines_from_distributed(
                 rank_cursor,
                 world_size,
                 group_name,
-                backend="nccl",
+                backend=backend,
             )
         )
         rank_cursor += engine_gpu_counts[i]
     model_update_groups = init_process_group(
-        backend="nccl",
+        backend=backend,
         init_method=f"tcp://{master_address}:{master_port}",
         world_size=world_size,
         rank=0,
@@ -246,7 +248,7 @@ def connect_rollout_engines_from_distributed(
 
 def disconnect_rollout_engines_from_distributed(args, group_name, model_update_groups, rollout_engines):
     """
-    Destroy NCCL on training and engines.
+    Destroy the weight-sync process group on training and engines.
     """
     refs = [engine.destroy_weights_update_group.remote(group_name) for engine in rollout_engines]
     try:
@@ -265,7 +267,7 @@ def update_weights_from_distributed(
     selector: str = "all",
 ) -> list[ObjectRef]:
     """
-    Send metadata (Ray), broadcast tensors (NCCL rank 0 → engines).
+    Send metadata over Ray, then broadcast tensors from rank 0 to the engines.
     """
     refs = [
         engine.update_weights_from_distributed.remote(

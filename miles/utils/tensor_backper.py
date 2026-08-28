@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import torch
 
+from miles.utils import accelerator
+
 _SourceGetter = Callable[[], Iterable[tuple[str, torch.Tensor]]]
 
 
@@ -69,7 +71,7 @@ class _TensorBackuperNormal(TensorBackuper):
             if name not in backup_dict:
                 backup_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
             backup_dict[name].copy_(param.detach(), non_blocking=True)
-        torch.cuda.synchronize()
+        accelerator.synchronize()
 
     @torch.no_grad()
     def copy(self, *, src_tag: str, dst_tag: str):
@@ -82,7 +84,7 @@ class _TensorBackuperNormal(TensorBackuper):
         for name, param in self._source_getter():
             assert name in backup_dict
             param.copy_(backup_dict[name], non_blocking=True)
-        torch.cuda.synchronize()
+        accelerator.synchronize()
 
 
 class _TensorBackuperMainCast(TensorBackuper):
@@ -118,7 +120,7 @@ class _TensorBackuperMainCast(TensorBackuper):
                 self._extras_backup[name] = torch.empty_like(tensor, device=torch.device("cpu"), pin_memory=True)
             self._extras_backup[name].copy_(tensor.detach(), non_blocking=True)
             self._extras_backup_by_id[id(tensor)] = self._extras_backup[name]
-        torch.cuda.synchronize()
+        accelerator.synchronize()
         self._backup_count += 1
         if self._ctx.check and self._backup_count <= self._check_num_cycles:
             self._expected_hashes = self._compute_hashes()
@@ -134,7 +136,7 @@ class _TensorBackuperMainCast(TensorBackuper):
             model_chunk.start_param_sync(force_sync=True)
         for name, tensor in self._ctx.extras_getter():
             tensor.copy_(self._extras_backup[name], non_blocking=True)
-        torch.cuda.synchronize()
+        accelerator.synchronize()
         if self._expected_hashes is not None:
             self._verify_hashes()
 

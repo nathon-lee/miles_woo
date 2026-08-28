@@ -5,6 +5,7 @@ import ray
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from miles._bootstrap import HARDWARE_PLATFORM_ENV, MUSA_PATCH_PATH_ENV
 from miles.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
 from miles.utils.environ import default_fp8_block_scaling_fp32_scales
 from miles.utils.ft_utils.heartbeat_utils import HeartbeatStatus
@@ -35,6 +36,16 @@ def allocate_gpus_for_actor(
         # DeepEP/NVSHMEM's internal NCCL conflicts with our NCCL and hangs under CUDA graphs.
         "NVSHMEM_DISABLE_NCCL": os.environ.get("NVSHMEM_DISABLE_NCCL", "1"),
         **{name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST},
+        **{
+            name: os.environ[name]
+            for name in (
+                HARDWARE_PLATFORM_ENV,
+                MUSA_PATCH_PATH_ENV,
+                "MUSA_VISIBLE_DEVICES",
+                "MTHREADS_VISIBLE_DEVICES",
+            )
+            if name in os.environ
+        },
         **args.train_env_vars,
     }
 

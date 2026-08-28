@@ -186,7 +186,7 @@ def resolve_visible_device_id(physical_device_id: int | float | str, platform: s
     env_key = visible_devices_env_key(platform)
     visible_devices = os.environ.get(env_key)
     device_id = int(float(physical_device_id))
-    if not visible_devices:
+    if not visible_devices or visible_devices.strip().lower() == "all":
         return device_id
 
     visible = [int(item.strip()) for item in visible_devices.split(",") if item.strip()]
@@ -209,6 +209,14 @@ def process_group_backend(backend: str = "auto", platform: str | None = None) ->
     if platform in ("cuda", "rocm"):
         return "nccl"
     return "gloo"
+
+
+def weight_update_backend(platform: str | None = None) -> str:
+    """Return the backend contract shared by trainer and rollout weight-sync groups."""
+    platform = hardware_platform() if platform is None else platform
+    if platform == "musa":
+        return "cpu:gloo,musa:mccl"
+    return process_group_backend(platform=platform)
 
 
 def autocast(*, dtype: torch.dtype, enabled: bool = True):

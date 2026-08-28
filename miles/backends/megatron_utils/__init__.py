@@ -1,6 +1,6 @@
 import logging
 
-import torch
+from miles.utils import accelerator
 
 try:
     import deep_ep
@@ -12,7 +12,7 @@ try:
         if torch_memory_saver._impl is not None:
             torch_memory_saver._impl._binary_wrapper.cdll.tms_set_interesting_region(False)
         old_init(self, *args, **kwargs)
-        torch.cuda.synchronize()
+        accelerator.synchronize()
         if torch_memory_saver._impl is not None:
             torch_memory_saver._impl._binary_wrapper.cdll.tms_set_interesting_region(True)
 
