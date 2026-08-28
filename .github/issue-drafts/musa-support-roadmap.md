@@ -193,50 +193,88 @@ Each implementation PR should:
 
 ## Proposed PR breakdown
 
-Branch names below are suggestions for contributor forks.
+Branch names below are suggestions for contributor forks. The 10 boundaries below are intended
+to keep each review focused; maintainers may combine two small PRs, but should not combine their
+acceptance responsibilities into one large patch.
 
-- [ ] **PR 1: Platform abstraction**  
+- [ ] **PR 0: Compatibility baseline and acceptance contract**\
+  Suggested branch: `docs/musa-compatibility-baseline`
+
+  Record GPU, driver, MUSA SDK, Python, torch, torch_musa, MCCL, Ray, SGLang, and image digest.
+  Add environment collection, L0/L1 smoke commands, version matrix, success markers, and explicit
+  unsupported states. Do not change training or rollout behavior.
+
+- [ ] **PR 1: Platform abstraction**\
   Suggested branch: `feat/musa-platform-abstraction`
 
   Existing candidate commit: `31285d03` in the `miles_woo` fork. Rebase or split it only after
-  resolving ownership with #1786; rerun the focused tests against the current Miles `main`.
+  resolving ownership with #1786; rerun focused tests against the current Miles `main`.
 
-  Add the accelerator interface, explicit platform selection, bootstrap ordering, backend selection, and CPU-mock tests. Do not add online weight synchronization or globally monkey-patch `torch.distributed`.
+  Add the accelerator interface, explicit platform selection, backend `auto`, and CPU-mock tests
+  for device, memory, autocast, RNG, and stream/event APIs. Keep bootstrap/device mapping,
+  online weight synchronization, and global `torch.distributed` monkey-patching out of this PR.
 
-- [ ] **PR 2: FSDP MUSA train-only support**  
-  Suggested branch: `feat/musa-fsdp-train-only`
+- [ ] **PR 2: Bootstrap and Ray device mapping**\
+  Suggested branch: `feat/musa-bootstrap-device-mapping`
 
-  Adapt FSDP device mesh, tensor placement, autocast, RNG, checkpointing, and Ray-visible device mapping. Add single-GPU and two-GPU smoke tests.
+  Initialize MUSA before importing SGLang, Megatron, or hardware extensions. Validate the mapping
+  `Ray logical GPU ID -> MUSA_VISIBLE_DEVICES -> local MUSA device`, and log rank, world size,
+  visible devices, and the selected device for both training and rollout actors.
 
-- [ ] **PR 3: Runtime image and version matrix**  
+- [ ] **PR 3: Runtime image and version matrix**\
   Suggested branch: `build/musa-runtime-image`
 
-  Add a reproducible MUSA image or vendor-image installation procedure. Pin the driver, MUSA SDK, torch, torch_musa, MCCL, SGLang, Python, and other required components.
+  Add a reproducible MUSA image or vendor-image installation procedure, pin tested
+  torch/torch_musa/MCCL/SGLang/Python combinations, record driver/SDK compatibility ranges, and
+  add image/environment smoke tests before real-hardware validation.
 
-- [ ] **PR 4: External SGLang and checkpoint weight update**  
-  Suggested branch: `feat/musa-sglang-checkpoint-update`
+- [ ] **PR 4: FSDP MUSA train-only support**\
+  Suggested branch: `feat/musa-fsdp-train-only`
 
-  Add the external rollout contract and a correctness-first checkpoint updater. Verify parameter hashes and fixed-input logits before and after an update.
+  Adapt FSDP device mesh, tensor placement, autocast, optimizer/RNG paths, and minimal checkpoint
+  save/load. Add single-GPU and two-GPU smoke tests; defer exact resume and online weight updates.
 
-- [ ] **PR 5: MCCL online weight synchronization**  
+- [ ] **PR 5: External SGLang rollout-only**\
+  Suggested branch: `feat/musa-sglang-rollout-only`
+
+  Connect Miles to an independently launched MUSA SGLang server. Verify token, finish reason,
+  log-prob, and reward contracts with repeated requests and capability probing. Do not create an
+  MCCL weight group or claim weight synchronization.
+
+- [ ] **PR 6: Checkpoint weight-update correctness**\
+  Suggested branch: `feat/musa-checkpoint-weight-update`
+
+  Add the slow trainer -> checkpoint -> external SGLang path. Verify parameter names, shapes,
+  dtypes, byte lengths, hashes, and fixed-input logits/log-probs at step 0, after the first update,
+  and at step N. Keep MCCL broadcast, colocate, P2P, and RDT out of this PR.
+
+- [ ] **PR 7: MCCL online weight synchronization**\
   Suggested branch: `feat/musa-mccl-online-weight-update`
 
-  Add the MCCL weight-update topology and process-group lifecycle. Validate creation, update, destruction, reconstruction, and multiple weight versions.
+  Add MCCL weight-update topology and process-group lifecycle. Validate `mccl` and
+  `cpu:gloo,musa:mccl`, create/destroy/reconstruct cycles, barrier, broadcast, rank/world-size,
+  multiple weight versions, tensor metadata, hashes, and lock release on failure.
 
-- [ ] **PR 6: Miles-managed SGLang actors**  
+- [ ] **PR 8: Miles-managed SGLang actors**\
   Suggested branch: `feat/musa-managed-sglang`
 
-  Propagate platform and device visibility to SGLang actors and subprocesses. Reuse the weight-update contract validated in the previous PR.
+  Propagate platform and device visibility to SGLang actors and subprocesses. Reuse the weight
+  update contract validated by PR 7, and first prove external/non-colocate two- or four-GPU E2E.
+  Defer fractional GPU, pause/resume, IPC, P2P, and RDT.
 
-- [ ] **PR 7: MUSA hardware CI**  
+- [ ] **PR 9: Incremental MUSA hardware CI**\
   Suggested branch: `ci/musa-hardware-smoke`
 
-  Add MUSA runner registration, environment checks, MCCL tests, FSDP smoke tests, SGLang server tests, and weight-update tests.
+  Start with runner registration, labels, environment probes, and L0/L1 MCCL. Add FSDP,
+  external SGLang, checkpoint, and MCCL weight-update tests incrementally. Maintain a CUDA/ROCm/MUSA
+  gap table and distinguish missing hardware, unported functionality, and unconnected tests.
 
-- [ ] **PR 8: Megatron MUSA feasibility and integration**  
+- [ ] **PR 10: Megatron MUSA experimental track**\
   Suggested branch: `experiment/musa-megatron-spike`
 
-  Keep this separate from the initial FSDP path. Begin with a fixed-version BF16 dense train-only feasibility test before attempting weight conversion, MoE, or low-precision support.
+  Keep this as a separate experimental issue and do not make it a prerequisite for initial FSDP
+  support. Start with a fixed-version BF16 dense train-only feasibility test before weight
+  conversion, MoE, or low-precision work. A passing spike is not native Miles support.
 
 ## Cross-project tracking
 

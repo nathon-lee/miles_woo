@@ -456,80 +456,97 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 
 ## 建议拆成独立 PR
 
-### PR 1：平台抽象
+建议拆成 10 个有明确入口、出口和验收边界的 PR。这里的 PR 是审查边界，
+不是必须逐个对应一次发布；如果某两个 PR 的改动很小，可以在维护者同意后合并，
+但不能把下面不同的验收责任重新揉成一个巨型 patch。
+
+### PR 0：环境基线与验收契约
+
+- 推荐分支：`docs/musa-compatibility-baseline`；
+- 固化 GPU、driver、MUSA SDK、Python、torch、torch_musa、MCCL、Ray、SGLang 和镜像 digest；
+- 新增 `tests/manual/musa/collect_env.py` 和 L0/L1 smoke 命令；
+- 记录版本矩阵、成功标志和“不支持”状态；
+- 不修改训练或 rollout 业务逻辑。
+
+### PR 1：Accelerator 平台抽象
 
 - 推荐分支：`feat/musa-platform-abstraction`；
 - 当前候选：`31285d03`（未合入 `main`，需先完成作者/维护者协作和基线同步）；
-- 新增 `miles/utils/accelerator.py`；
-- 增加 `--hardware-platform` 和 backend `auto`；
-- 定义 bootstrap 的导入顺序，确保 MUSA 初始化早于 SGLang、Megatron 和硬件扩展；
-- 改造通用 memory/device/autocast/RNG/stream/event API；
-- 添加 CPU mock 单元测试，覆盖显式 MUSA 请求失败时 fail fast，并确保 CUDA/ROCm 行为不变；
-- 不在这个 PR 全局 monkey-patch `torch.distributed`，也不接入在线权重更新。
+- 新增 `miles/utils/accelerator.py`、`--hardware-platform` 和 backend `auto`；
+- 统一 device、memory、autocast、RNG、stream/event 和 backend 接口；
+- 添加 CPU mock 测试，覆盖显式 MUSA 请求失败时 fail fast，并确保 CUDA/ROCm 不变；
+- 不在这个 PR 引入 Ray 映射、在线权重更新或全局 monkey-patch `torch.distributed`。
 
-### PR 2：FSDP MUSA train-only
+### PR 2：Bootstrap 与 Ray 设备映射
 
-- 推荐分支：`feat/musa-fsdp-train-only`；
-- 改造 FSDP device mesh、模型搬运、data tensor、checkpoint 和 MUSA RNG；
-- 在 Ray train actor 中完成逻辑 GPU ID → `MUSA_VISIBLE_DEVICES` → local device 的映射；
-- 新增 `scripts/musa/run_qwen3_0_6b_fsdp_smoke.py`；
-- 新增单卡和两卡手工 smoke；
-- 明确禁用不支持功能。
+- 推荐分支：`feat/musa-bootstrap-device-mapping`；
+- 确保 MUSA 初始化早于 SGLang、Megatron 和硬件扩展导入；
+- 完成 Ray logical GPU ID → `MUSA_VISIBLE_DEVICES` → local device 映射；
+- 输出并校验 rank、world size、可见设备和实际绑定设备；
+- 这一层同时服务训练和 rollout，不应隐藏在 FSDP PR 内。
 
-### PR 3：MUSA 镜像与版本锁定
+### PR 3：MUSA 镜像与依赖矩阵
 
 - 推荐分支：`build/musa-runtime-image`；
-- 新增 `docker/Dockerfile.musa` 或固定的供应商基础镜像流程；
-- 固定 torch/torch_musa/SGLang/MUSA 组件版本；
-- 添加环境自检和镜像 smoke；
-- 更新安装与版本文档。
+- 新增 `docker/Dockerfile.musa` 或固定供应商镜像安装流程；
+- 固定已验证的 torch/torch_musa/MCCL/SGLang 组合和 Python 版本；
+- 记录 driver/SDK 兼容范围，而不是声称由仓库锁定 driver；
+- 添加环境自检和镜像 smoke，作为后续真机验证的统一基线。
 
-### PR 4：外部 SGLang 与 checkpoint 权重更新
+### PR 4：FSDP MUSA train-only
 
-- 推荐分支：`feat/musa-sglang-checkpoint-update`；
-- rollout-only contract test；
-- 新增 correctness-first checkpoint updater；
-- 用 capability probing 兼容锁定的 SGLang 版本，并区分可选 endpoint 与必需能力；
-- 添加参数 hash 和 logits parity 验证；
-- 不启动 Miles 内部 SGLang actor，不创建 MCCL 权重组。
+- 推荐分支：`feat/musa-fsdp-train-only`；
+- 改造 FSDP device mesh、模型/数据搬运、autocast、optimizer 和 MUSA RNG；
+- 只加入最小 checkpoint save/load，不加入 exact resume 或在线权重更新；
+- 新增 Qwen3 小模型单卡和两卡 smoke，明确禁用不支持功能。
 
-### PR 5：MCCL 在线权重更新
+### PR 5：外部 SGLang rollout-only
+
+- 推荐分支：`feat/musa-sglang-rollout-only`；
+- 连接独立启动的 MUSA SGLang，不启动 Miles 内部 actor；
+- 验证 token、finish reason、log-prob 和 reward contract，连续完成固定请求；
+- 用 capability probing 兼容版本差异；
+- 不创建 MCCL 权重组，也不宣称权重同步完成。
+
+### PR 6：Checkpoint 权重更新正确性路径
+
+- 推荐分支：`feat/musa-checkpoint-weight-update`；
+- 新增 trainer → checkpoint → 外部 SGLang 的慢速更新路径；
+- 验证参数名、shape、dtype、byte length、hash 和固定输入 logits/log-prob；
+- 至少覆盖 step 0、首次更新和 step N；
+- 不在这个 PR 引入 MCCL broadcast、colocate 或 P2P。
+
+### PR 7：MCCL 在线权重同步
 
 - 推荐分支：`feat/musa-mccl-online-weight-update`；
-- 将权重更新 backend 平台化，验证 `cpu:gloo,musa:mccl`；
-- 定义 trainer、单/多 rollout engine 的 group/rank/world-size 拓扑；
-- 使用可配置、可检查的非临时端口区间，并对端口冲突明确报错；
-- 验证 process group 创建、销毁、重建和多轮 weight version；
-- 权重更新锁必须在 `finally` 中释放，失败时不得留下死锁或半更新状态；
-- 对每轮记录 names/dtypes/shapes/byte lengths、参数 hash 和固定输入 logits；
-- 先在 external、non-colocate 模式完成 1 trainer + 1 rollout rank，再扩到多 engine；
-- 不在这个 PR 引入内部 SGLang/Ray 托管、P2P、LoRA 或多种 `UPDATE_MODE`。
+- 平台化 `mccl` 和 `cpu:gloo,musa:mccl` 权重组；
+- 验证创建、销毁、重建、barrier、broadcast、rank/world-size 和多轮 weight version；
+- 记录每轮 tensor metadata、hash 和 logits parity，更新锁在 `finally` 中释放；
+- 先完成 1 trainer + 1 rollout rank，再扩展到多 engine。
 
-### PR 6：Miles 内部托管 SGLang
+### PR 8：Miles 内部托管 SGLang actor
 
 - 推荐分支：`feat/musa-managed-sglang`；
-- 为 SGLang engine 和子 actor 传播平台、visibility 和依赖环境；
-- 添加 scheduler/engine rank 与 MUSA device 唯一绑定测试；
-- 复用 PR 5 已验证的权重更新 contract，不在 actor bring-up 中重写通信协议；
-- 完成非 colocate 两卡/四卡端到端 smoke；
-- 不启用 fractional GPU、pause/resume 或 CUDA/MUSA IPC。
+- 传播平台、visibility 和依赖环境到 SGLang engine/子 actor；
+- 验证 scheduler/engine rank 与 MUSA device 唯一绑定；
+- 复用 PR 7 的权重更新 contract，先完成 external、non-colocate E2E；
+- 不启用 fractional GPU、pause/resume、IPC、P2P 或 RDT。
 
-### PR 7：MUSA CI
+### PR 9：增量式 MUSA 硬件 CI
 
 - 推荐分支：`ci/musa-hardware-smoke`；
-- 在 `tests/ci/ci_register.py` 增加 `register_musa_ci` 和 `HWBackend.MUSA`；
-- 在 `tests/ci/run_suite.py` 增加 MUSA suite；
-- 新增 MUSA workflow、runner 标签、镜像选择和日志采集；
-- 将前述 PR 已证明的环境、MCCL、FSDP 两步、SGLang server 和 weight-update smoke 接入 runner；
-- 保留 CUDA/ROCm/MUSA 同名 suite gap 表，不用 mock 替代真机 CI。
+- 第一阶段接入 runner、标签、环境探针和 L0/L1 MCCL；
+- 后续逐步接入 FSDP、外部 SGLang、checkpoint 和 MCCL weight-update smoke；
+- 在 `tests/ci` 增加 MUSA suite 和 CUDA/ROCm/MUSA gap 表；
+- 明确区分 runner 缺失、功能未移植、硬件不支持和测试未接入，不能用 mock 代替真机证据。
 
-### PR 8：Megatron MUSA
+### PR 10：Megatron MUSA 实验路线
 
 - 推荐分支：`experiment/musa-megatron-spike`；
-- 单独维护依赖兼容矩阵；
-- 先以外部 `megatron-lm-musa-patch` 完成固定版本 feasibility spike；
-- 从 BF16 dense train-only 开始；
-- 再接权重转换、MCCL broadcast、MoE 和低精度。
+- 最好作为独立 experimental issue，不阻塞首版 FSDP 支持；
+- 固定外部 `megatron-lm-musa-patch` 和 Megatron base commit；
+- 先做 BF16 dense train-only feasibility，再考虑权重转换、MCCL、MoE 和低精度；
+- spike 通过不等于 Miles 原生 MUSA 支持完成。
 
 这些 PR 不应合成一个巨型 patch。依赖版本兼容不再作为最后的“大杂烩修复”：
 每个功能 PR 只携带它必需的延迟导入、capability probing 和契约测试。每一层都应能独立回答
