@@ -12,6 +12,12 @@ description: 基于当前 Miles、torch_musa、SGLang 和 Megatron-LM 现状设�
 实施前应重新锁定和验证 commit。本文对 Miles 公开 roadmap 和 AMD/ROCm 进展的
 补充检查日期为 2026-08-27；issue 状态和验证结果以链接中的最新内容为准。
 
+截至 2026-08-28，`miles_woo` 的 `feat/musa-platform-abstraction` 分支已有一个候选
+实现（commit `31285d03`），包含 accelerator 层、平台参数解析和 CPU mock 测试；它仍是
+未合入 `main` 的 `Patch available`，没有 MUSA 真机验收证据，不能将其描述为 Miles 已
+支持 MUSA。该候选实现与公开的 Miles PR #1786 存在功能重叠，后续应先与原作者和维护者
+确认采用“修订原 PR”还是“独立 follow-up PR”，保留原有贡献归属，避免平行实现互相冲突。
+
 ## 结论
 
 推荐按以下主线推进：
@@ -193,6 +199,15 @@ AMD 的完整列表对齐而把 LoRA、FP8、colocate 提前到 MUSA 首版。
 
 因此不应在入口简单 `import torchada` 后就宣称完成。适配层可以帮助首轮 smoke，最终仍
 需要把设备、通信、调度和能力开关收敛到 Miles 自己的接口。
+
+## 贡献关系与合并策略
+
+PR #1786 和 `feat/musa-platform-abstraction` 都应先视为待评审的上游工作，而不是可以
+直接覆盖的“废弃版本”。如果候选分支与 #1786 的目标和提交者一致，优先在原 PR 上提出
+拆分、rebase 或补充测试的建议；只有原作者和维护者明确同意时，才在该 PR 分支上继续
+修改。若无法取得协作权限，使用独立 follow-up PR，明确写出依赖的 base commit、复用的
+提交和新增范围，并在描述中链接 #1786。无论采用哪条路径，PR 都必须重新对齐当前 `main`
+并通过本文的 L0-L2 验收，不能因为分支名或已有 CPU mock 测试而提前勾选 roadmap。
 
 ## 设计一个统一的平台抽象
 
@@ -444,6 +459,7 @@ world size、序列长度、batch、TP/DP 和实际 tokens/s，再与同配置�
 ### PR 1：平台抽象
 
 - 推荐分支：`feat/musa-platform-abstraction`；
+- 当前候选：`31285d03`（未合入 `main`，需先完成作者/维护者协作和基线同步）；
 - 新增 `miles/utils/accelerator.py`；
 - 增加 `--hardware-platform` 和 backend `auto`；
 - 定义 bootstrap 的导入顺序，确保 MUSA 初始化早于 SGLang、Megatron 和硬件扩展；

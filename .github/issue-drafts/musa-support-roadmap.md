@@ -38,7 +38,18 @@ There is already an open implementation attempt:
 
 This roadmap is not intended to replace or duplicate that work.
 
+As of 2026-08-28, the `miles_woo` fork also contains a candidate platform-abstraction branch,
+[`feat/musa-platform-abstraction`](https://github.com/nathon-lee/miles_woo/tree/feat/musa-platform-abstraction),
+at commit `31285d03`. It adds the accelerator layer, platform argument handling, bootstrap
+ordering, and CPU-mock tests, but it is not merged into Miles `main` and has no real MUSA hardware
+evidence. Treat it as `Patch available`, not as support completion.
+
 Before starting new implementation PRs, we should coordinate with the author of #1786 and determine which commits can be reused or split into smaller reviewer-friendly changes. Existing authorship and contributions should be preserved.
+
+The collaboration decision is an explicit gate: if the candidate and #1786 have the same intended
+ownership, request permission to revise or split #1786; otherwise open a follow-up PR from the
+current `main`, link #1786, and state the exact reused base and new scope. Do not silently copy a
+colleague's branch or mark a roadmap item complete because a fork branch exists.
 
 Related references:
 
@@ -186,6 +197,9 @@ Branch names below are suggestions for contributor forks.
 
 - [ ] **PR 1: Platform abstraction**  
   Suggested branch: `feat/musa-platform-abstraction`
+
+  Existing candidate commit: `31285d03` in the `miles_woo` fork. Rebase or split it only after
+  resolving ownership with #1786; rerun the focused tests against the current Miles `main`.
 
   Add the accelerator interface, explicit platform selection, bootstrap ordering, backend selection, and CPU-mock tests. Do not add online weight synchronization or globally monkey-patch `torch.distributed`.
 
