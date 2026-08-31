@@ -24,7 +24,7 @@ def allocate_gpus_for_actor(
 
     # Use placement group to lock resources for models of same type
     assert pg is not None
-    pg, reordered_bundle_indices, _reordered_gpu_ids = pg
+    pg, reordered_bundle_indices, reordered_gpu_ids = pg
 
     env_vars = {
         # because sglang will always set NCCL_CUMEM_ENABLE to 0
@@ -108,6 +108,13 @@ def allocate_gpus_for_actor(
     actor_handles = []
     master_addr, master_port = None, None
     for rank in range(world_size):
+        rank_env_vars = dict(env_vars)
+        if args.hardware_platform == "musa":
+            physical_gpu_id = str(int(reordered_gpu_ids[rank]))
+            rank_env_vars["MUSA_VISIBLE_DEVICES"] = physical_gpu_id
+            rank_env_vars["MTHREADS_VISIBLE_DEVICES"] = physical_gpu_id
+            rank_env_vars["RAY_EXPERIMENTAL_NOSET_MUSA_VISIBLE_DEVICES"] = "1"
+
         options = dict(
             num_cpus=num_gpus_per_actor,
             num_gpus=num_gpus_per_actor,
@@ -115,10 +122,11 @@ def allocate_gpus_for_actor(
                 placement_group=pg,
                 placement_group_bundle_index=reordered_bundle_indices[rank],
             ),
+            runtime_env={"env_vars": rank_env_vars},
         )
         if args.offload_train_target == "disk" and args.offload_train and args.train_backend == "megatron":
             rank_dir = os.path.join(args.offload_train_disk_dir, f"cell{cell_index}_rank{rank}")
-            options["runtime_env"] = {"env_vars": {**env_vars, "TMS_DISK_BACKUP_DIR": rank_dir}}
+            options["runtime_env"]["env_vars"]["TMS_DISK_BACKUP_DIR"] = rank_dir
         actor = TrainRayActor.options(**options).remote(
             args,
             world_size,
