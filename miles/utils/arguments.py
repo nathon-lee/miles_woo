@@ -3343,7 +3343,7 @@ def miles_validate_args(args):
             args.offload_train = True
         if args.offload_rollout is None:
             args.offload_rollout = True
-        if args.sglang_cuda_graph_backend_prefill is None:
+        if getattr(args, "sglang_cuda_graph_backend_prefill", None) is None:
             args.sglang_cuda_graph_backend_prefill = "disabled"
             logger.info(
                 "Colocate mode: defaulting --sglang-cuda-graph-backend-prefill=disabled to avoid NVLS OOM. "

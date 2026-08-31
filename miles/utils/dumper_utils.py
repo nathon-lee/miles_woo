@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import enum
+import importlib
 import logging
 import shutil
 from argparse import Namespace
@@ -12,7 +13,15 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
-from sglang.srt.debug_utils.dumper import DumperConfig, _get_rank, dumper
+try:
+    from sglang.srt.debug_utils.dumper import DumperConfig, _get_rank, dumper
+except ImportError as exc:
+    if "DumperConfig" not in str(exc):
+        raise
+    _sglang_dumper = importlib.import_module("sglang.srt.debug_utils.dumper")
+    DumperConfig = None
+    _get_rank = _sglang_dumper._get_rank
+    dumper = _sglang_dumper.dumper
 
 from miles.backends.training_utils.parallel import get_parallel_state
 from miles.utils.environ import enable_experimental_ft_trainer
@@ -332,6 +341,13 @@ def _barrier_after_dump_dir_cleanup() -> None:
 
 def _get_phase_override_configs(args: Namespace, phase: DumperPhase) -> dict[str, Any]:
     raw = getattr(args, f"dumper_{phase.value}")
+    if DumperConfig is None:
+        if args.dumper_enable or raw:
+            raise RuntimeError(
+                "The installed SGLang does not provide DumperConfig; "
+                "dumper options are unavailable."
+            )
+        return {"enable": False}
     return {"enable": args.dumper_enable, **DumperConfig._kv_pairs_to_dict(raw)}
 
 

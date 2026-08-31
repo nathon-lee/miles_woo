@@ -302,11 +302,15 @@ class FSDPTrainRayActor(TrainRayActor):
             model = model.to_empty(device=accelerator.device())
 
         is_cpu_offload = cpu_offload is not None
-        options = StateDictOptions(full_state_dict=True, cpu_offload=is_cpu_offload, broadcast_from_rank0=True)
+        options = StateDictOptions(
+            full_state_dict=True,
+            cpu_offload=is_cpu_offload,
+            broadcast_from_rank0=True,
+        )
 
         set_model_state_dict(model, full_state, options=options)
 
-        # set_model_state_dict will not broadcast buffers, so we need to broadcast them manually.
+        # set_model_state_dict will not broadcast buffers, so broadcast them manually.
         for _name, buf in model.named_buffers():
             dist.broadcast(buf, src=0)
 

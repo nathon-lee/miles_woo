@@ -705,12 +705,30 @@ class SGLangEngine(RayActor):
         return response
 
     def begin_weight_update(self, selector: str = "all"):
-        """Open a weight-update session on the engine (restores packed weights for loading)."""
-        return self._make_request("begin_weight_update", {"selector": selector})
+        """Open a weight-update session, if supported by the SGLang server."""
+        try:
+            return self._make_request("begin_weight_update", {"selector": selector})
+        except requests.exceptions.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                logger.warning(
+                    "SGLang does not expose /begin_weight_update; "
+                    "continuing with direct weight update compatibility mode."
+                )
+                return {"skipped": True}
+            raise
 
     def end_weight_update(self):
-        """Close the weight-update session (post-load + quant post-process on the full model)."""
-        return self._make_request("end_weight_update", {})
+        """Close a weight-update session, if supported by the SGLang server."""
+        try:
+            return self._make_request("end_weight_update", {})
+        except requests.exceptions.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                logger.warning(
+                    "SGLang does not expose /end_weight_update; "
+                    "continuing with direct weight update compatibility mode."
+                )
+                return {"skipped": True}
+            raise
 
     def update_weight_version(self, weight_version: str):
         return self._make_request(

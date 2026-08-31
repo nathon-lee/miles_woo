@@ -16,7 +16,11 @@ import json
 import os
 from typing import Any
 
-from sglang.srt.entrypoints.openai import encoding_dsv4
+try:
+    from sglang.srt.entrypoints.openai import encoding_dsv4
+except ImportError:
+    encoding_dsv4 = None
+
 from sglang.srt.entrypoints.openai.protocol import Tool
 
 from miles.utils.chat_template_utils.templates import encoding_dsv32
@@ -95,6 +99,10 @@ class DeepSeekFamily:
         encoder appends a family- and role-specific next-assistant suffix after
         generation-ready tails; ``add_generation_prompt=False`` strips it.
         """
+        if self.template is None:
+            raise ImportError(
+                "DeepSeek V4 chat rendering requires an SGLang build that provides encoding_dsv4"
+            )
         encode_config = self._build_encode_config(kwargs)
         if tools:
             messages = _inject_tools_into_system(messages, tools)
