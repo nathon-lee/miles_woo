@@ -30,3 +30,39 @@ def test_flush_cache_sleeps_between_pending_request_retries(monkeypatch):
         f"expected the loop to back off on every one of its 60 attempts, got {len(sleep_calls)} sleeps "
         "-- a 400 response (pending requests) must not skip the retry delay"
     )
+
+
+def test_check_weights_retries_legacy_schema_on_bad_request(monkeypatch):
+    """Older SGLang builds reject selector/skip-list fields on the checker."""
+    pytest.importorskip("sglang")
+    from miles.backends.sglang_utils.sglang_engine import SGLangEngine
+
+    engine = SGLangEngine.__new__(SGLangEngine)
+    requests_seen = []
+
+    response = requests.Response()
+    response.status_code = 400
+    response._content = b"legacy schema"
+    error = requests.exceptions.HTTPError(response=response)
+
+    def make_request(endpoint, payload):
+        requests_seen.append((endpoint, payload))
+        if len(requests_seen) == 1:
+            raise error
+        return {"ok": True}
+
+    monkeypatch.setattr(engine, "_make_request", make_request)
+
+    assert engine.check_weights(action="compare", selector="target", skip_list=["derived"]) == {"ok": True}
+    assert requests_seen == [
+        (
+            "weights_checker",
+            {
+                "action": "compare",
+                "allow_quant_error": False,
+                "selector": "target",
+                "skip_tensor_list": ["derived"],
+            },
+        ),
+        ("weights_checker", {"action": "compare", "allow_quant_error": False}),
+    ]
