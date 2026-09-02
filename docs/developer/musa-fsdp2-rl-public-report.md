@@ -1,6 +1,6 @@
 ---
 title: Miles FSDP2 on MUSA RL experiment report
-description: Miles 使用 FSDP2、SGLang 和 GRPO 在摩尔线程 MUSA GPU 上完成强化学习闭环的脱敏实验报告。
+description: Miles 使用 FSDP2、SGLang 和 GRPO 在摩尔线程 MUSA GPU 上完成强化学习闭环的实验报告。
 ---
 
 # Miles FSDP2 on MUSA 强化学习实验报告
@@ -149,7 +149,59 @@ rollout/weight_version/mixed_version_ratio: 0.0
 所以当前状态应描述为“reward 有提升并出现初步平台趋势”，不能描述为“RL 已经收敛”。
 训练 batch 每轮使用不同 prompt，其 reward 也不能替代固定验证集 accuracy。
 
-### 3.4 Checkpoint 状态
+### 3.4 固定 GSM8K eval：checkpoint 160 → 200
+
+在同一批 128 条 GSM8K 验证样本上，checkpoint `160` 和 `200` 的固定评估结果为：
+
+| Checkpoint | `eval/gsm8k` | 等价正确数 |
+|---:|---:|---:|
+| 160 | `0.703125` | 90/128 |
+| 200 | `0.7265625` | 93/128 |
+
+checkpoint `200` 的 eval 正常完成（`EVAL_AT_200_RETRY_EXIT=0`），相较 checkpoint `160`
+提升 `3/128`，即 `+2.34` 个百分点；`eval/truncated_ratio` 为 `0.1171875`。
+这是一个积极信号，但只有一个固定 eval 区间，仍不足以判断已经收敛。
+
+eval-only 进程中的 `eval 0` 和 `weight_version=1.0` 是进程内部计数，不表示模型回到了
+第 0 步；本次实际加载的是 checkpoint `200`。后续使用 `--eval-interval 20` 从 200
+继续训练时，应在 rollout `220、240、...、400` 记录同一固定评估集的结果。
+
+### 3.5 NVIDIA 官方结果说明
+
+本报告目前没有 NVIDIA 官方团队在相同 Miles、Qwen3-0.6B、GSM8K 和 FSDP2 配置下运行
+并公开的精度或收敛数据。文中的 MUSA 数字是本项目在 Moore Threads 节点上的实测；
+RTX A4500/CUDA 仅是建议的后续基线，不代表 NVIDIA 官方测试结果。因此，当前结果不能
+用于声称 MUSA 与 NVIDIA 的收敛性能或最终精度一致。需要进行硬件归因时，应使用相同
+checkpoint、数据划分、采样参数和固定 eval 集，在 NVIDIA GPU 上单独复现实验并记录结果。
+
+### 3.6 主长跑 200–399 的 reward signal 诊断
+
+主长跑 `20260901-191717` 共完成 200 个训练 rollout，包含 3200 个样本和 800 个四样本
+group。reward 为二值 `0/1`，总体 reward mean 为 `0.7321875`。
+
+| Group 类型 | 数量 | 比例 |
+|---|---:|---:|
+| `0000`（全错） | 96 | `12.00%` |
+| `1111`（全对） | 439 | `54.875%` |
+| `mixed`（组内有对有错） | 265 | `33.125%` |
+
+这意味着 `66.875%` 的 group 没有组内 reward 差异，不能提供有效的 GRPO 相对 advantage；
+只有约三分之一的 group 能区分同一 prompt 下的不同回答。后期 mixed group 比例从
+`200–219` 的 `37.5%` 降到 `380–399` 的 `27.5%`，而全对 group 比例上升，表明 reward
+提高的同时可用学习信号正在饱和。
+
+3200 个样本中有 509 个被标记为 `truncated`（`15.90625%`）。完成样本 reward mean 为
+`0.848755`，截断样本仅为 `0.115914`，说明 response 截断会直接损失有效数学 reward。
+训练 reward 从窗口 `200–219` 的 `0.71875` 上升到 `380–399` 的 `0.771875`，固定
+`eval/gsm8k` 从 `0.7109375` 上升到 `0.7421875`，但 eval 在中间明显波动。因此当前
+应描述为“GRPO 确实学习，但有效 group 比例偏低且截断样本 reward 很低，导致增益有限并
+出现平台趋势”，而不是“训练完全不收敛”。
+
+当前 rollout 文件没有保存 entropy、KL、advantage 或 clip fraction，不能据此判断 policy
+collapse。log-prob 全部有限、样本未被移除、weight version 连续递增，当前没有权重同步
+异常的证据。后续应优先比较更长 response 和更多每 prompt 采样数的控制实验。
+
+### 3.7 Checkpoint 状态
 
 最后完整 checkpoint 为 iteration `160`。训练运行到 rollout `179` 附近时，checkpoint
 保存因输出文件系统空间耗尽而失败。训练计算已经执行到该阶段，但不完整的后续 checkpoint
@@ -318,6 +370,37 @@ checkpoint directory has no zero-byte shard
 每个完整 checkpoint 约 7.3G，长跑应把 checkpoint、rollout 和日志写入容量充足的持久化
 挂载，并在启动前检查块空间和 inode。磁盘耗尽可能发生在训练已完成若干 rollout 之后，
 因此不能只根据进程是否运行判断实验是否成功。
+
+### 4.11 DCP 保存的 CPU offload 要求
+
+一次恢复验证中，rollout、log-prob 和 actor training 均已完成，但 distributed
+checkpoint 在 filesystem writer 阶段因 `assert tensor.is_cpu` 失败。原因是 FSDP state
+dict 默认仍可能包含 MUSA tensor；filesystem writer 只接受 CPU tensor。
+
+模型和优化器的 `get_state_dict()` 都需要显式使用：
+
+```python
+StateDictOptions(cpu_offload=True)
+```
+
+失败保存产生的零字节 shard 或缺少 tracker 的目录不能用于恢复。修复后必须验证实际
+执行了一轮训练并成功生成非零大小的 model/optimizer shard，不能只依据外层进程的
+`EXIT=0`。
+
+### 4.12 Resume smoke 的 rollout 边界
+
+恢复 checkpoint 后，`start_rollout_id` 是 checkpoint 之后的绝对 rollout id，
+`--num-rollout` 也是绝对结束边界，不是“额外执行多少轮”。例如从 `160` 恢复：
+
+```text
+跑 1 轮：  --num-rollout 161 --save-interval 1
+跑 20 轮： --num-rollout 180 --save-interval 20
+```
+
+如果错误地使用 `--num-rollout 20`，训练循环为空，程序可能正常退出，但不会产生
+rollout、训练指标或 checkpoint。有效 smoke 必须同时检查 `perf`、`log_probs`、
+`actor_train`、`Saved checkpoint`、tracker 和非零 shard；`EXIT=0` 本身不足以证明
+训练执行过。
 
 ## 5. 关键运行命令
 
@@ -512,6 +595,7 @@ cat "$CHECKPOINT_ROOT/latest_checkpointed_iteration.txt" 2>/dev/null || true
 本次实验已经跨过“FSDP2 是否能在 MUSA 上运行”的基础阶段，完成了 SGLang rollout、
 GRPO reward/advantage、FSDP2 训练、MCCL 通信和分布式权重更新构成的完整强化学习闭环。
 
-180-rollout 数据说明训练是有效的，并出现约 `0.70` 的平台趋势；但由于缺少固定验证集
-曲线、reward 仍有明显波动，且最后一次 checkpoint 保存受磁盘空间影响，当前应将结果
-定义为“完整闭环跑通并观察到初步学习趋势”，而不是“模型已经收敛”。
+200–399 主长跑说明训练 reward 和固定 GSM8K eval 均有小幅提升，但 binary reward 下
+`66.875%` 的 group 为零方差，且 `15.90625%` 的样本被截断并产生很低 reward；eval 曲线
+仍有明显波动。因此当前应将结果定义为“完整闭环跑通、训练有效但有效学习信号不足、增益
+有限并出现平台趋势”，而不是“模型已经稳定收敛”。

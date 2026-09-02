@@ -574,6 +574,59 @@ df -h /workspace/host
 每个完整 checkpoint 约 7.3G。旧 checkpoint、备份和被删除但仍打开的日志应归档到容量
 充足的 `/data` 挂载；不能使用零字节 shard 或缺少 tracker 的不完整目录恢复。
 
+### 4.19 FSDP DCP 保存必须显式 CPU offload
+
+一次长跑在 rollout `179` 已完成 rollout、log-prob 和 actor training，但在保存
+iteration `180` 时失败：
+
+```text
+torch.distributed.checkpoint ... filesystem.py
+assert tensor.is_cpu
+CheckpointException
+```
+
+这不是显存或磁盘空间错误，而是 filesystem storage writer 收到了 MUSA tensor。Miles
+的 `ModelState.state_dict()` 和 `OptimizerState.state_dict()` 原先调用
+`get_state_dict()` 时使用默认的 `cpu_offload=False`，因此保存阶段仍可能保留设备 tensor。
+
+修复方式是在两个 state-dict wrapper 中显式设置：
+
+```python
+from torch.distributed.checkpoint.state_dict import StateDictOptions
+
+options = StateDictOptions(cpu_offload=True)
+get_state_dict(..., options=options)
+```
+
+模型和优化器都必须设置该选项。修复后应至少验证一次真正的训练和 checkpoint 保存，不能
+只根据外层脚本的 `EXIT=0` 判定成功。零字节 `.distcp`、缺少 tracker 或只有目录没有
+`Saved checkpoint` 日志的结果均视为不完整 checkpoint。
+
+### 4.20 Resume smoke 的 `--num-rollout` 是绝对上限
+
+从 iteration `160` 恢复时，checkpoint metadata 会将 `start_rollout_id` 设置为 `160`。
+训练循环的边界是：
+
+```python
+for rollout_id in range(args.start_rollout_id, args.num_rollout):
+```
+
+因此设置 `--num-rollout 20` 并不是“在 160 后再跑 20 轮”，而是得到空区间
+`range(160, 20)`。进程仍可能以 `EXIT=0` 退出，但不会生成 rollout、`perf`、
+`actor_train` 或 checkpoint。这次 smoke 就出现了该假阳性：日志只有模型加载和初始
+权重同步，目标 run 目录没有 tracker。
+
+恢复验证应按绝对 rollout 上限设置参数：
+
+```text
+从 160 恢复、跑 1 轮：  --num-rollout 161 --save-interval 1
+从 160 恢复、跑 20 轮： --num-rollout 180 --save-interval 20
+```
+
+验证日志必须同时出现 `perf <id>:`、`log_probs`、`actor_train` 和 `Saved checkpoint`，
+并检查 tracker 与非零大小 shard。诊断目录时不要让 `set -e` 在缺失 tracker 处提前退出，
+否则会漏掉真正的日志和目录证据；可使用 `set +e` 完成完整扫描。
+
 ## 5. 主要代码修改
 
 | 文件 | 修改目的 |
@@ -889,6 +942,66 @@ Reward 窗口统计如下：
 GSM8K 验证样本周期性评估；只有当固定 eval 指标在连续多个窗口不再提升且 loss、梯度
 范数和截断率稳定时，才可判断接近收敛。
 
+### 7.4 固定 GSM8K eval：checkpoint 160 → 200
+
+随后使用同一批 128 条 GSM8K 验证样本，对 checkpoint `160` 和 checkpoint `200` 做了
+固定评估：
+
+| Checkpoint | Eval samples | `eval/gsm8k` | 等价正确数 |
+|---:|---:|---:|---:|
+| 160 | 128 | `0.703125` | 90/128 |
+| 200 | 128 | `0.7265625` | 93/128 |
+
+checkpoint `200` 的评估进程正常完成（`EVAL_AT_200_RETRY_EXIT=0`），平均 response
+length 为 `546.7`，`eval/truncated_ratio` 为 `0.1171875`。相较 checkpoint `160`，
+固定 eval 提升 `3/128`，即 `+0.0234375`（+2.34 个百分点）。这与长跑 reward 约 `0.70`
+的平台趋势一致，但目前只有一个对比区间，不能单独据此宣称模型已经收敛。
+
+需要注意，日志中的 `eval 0` 是独立 eval-only 进程内部的 rollout ID，不代表加载了第
+0 步模型；本次实际评估模型来自 checkpoint `200`。同理，`weight_version=1.0` 是该
+评估进程的内部权重版本，不是训练 checkpoint 编号。
+
+后续长跑设置为 `--eval-interval 20` 时，checkpoint `200` 之后应在 rollout `220、240、
+...、400` 进行相同固定评估，并比较 `eval/gsm8k` 曲线。只有连续 3–5 个评估点没有提升，
+才考虑调整学习率、采样数或 response length。
+
+### 7.5 NVIDIA 官方对照数据边界
+
+截至本报告，材料中没有 NVIDIA 官方团队在相同 Miles、Qwen3-0.6B、GSM8K 和 FSDP2
+配置下发布或运行的对照结果。报告中的 MUSA 指标来自本项目在 Moore Threads 节点上的
+实测；代码仓库中的 CUDA/A4500 运行配置和社区讨论只能作为后续对照实验的方案，不能写成
+“NVIDIA 官方结果”。因此，当前不能用本报告证明 MUSA 与 NVIDIA 的收敛速度或最终精度
+等价。若需要硬件归因，应在 RTX A4500 上使用相同模型、数据、采样参数、固定 eval 集和
+checkpoint 起点，独立完成 CUDA FSDP2 基线后再比较。
+
+### 7.6 主长跑 200–399 的 reward signal 诊断
+
+对主长跑 `20260901-191717` 的 200 个训练 rollout 进行逐文件分析，共得到 3200 个样本、
+800 个四样本 group。reward 是二值 `0/1`，总体 reward mean 为 `0.7321875`，其中
+`reward=1` 占 `73.21875%`。
+
+| Group 类型 | 数量 | 比例 |
+|---|---:|---:|
+| `0000`（全错） | 96 | `12.00%` |
+| `1111`（全对） | 439 | `54.875%` |
+| `mixed`（组内有对有错） | 265 | `33.125%` |
+
+因此 `66.875%` 的 group 为零方差，不能提供有效的 GRPO 相对 advantage；只有约三分之一
+的 group 能区分同一 prompt 下的不同回答。后期 `mixed` group 从窗口 `200–219` 的
+`30/80` 降至 `380–399` 的 `22/80`，而 `1111` group 从 `41/80` 增至 `49/80`，说明
+训练 reward 上升的同时，组内学习信号正在饱和。
+
+response 截断同样会显著削弱 reward：3200 个样本中有 509 个为 `truncated`（`15.90625%`）。
+完成样本 reward mean 为 `0.848755`，截断样本仅为 `0.115914`。主长跑的训练 reward
+窗口从 `200–219` 的 `0.71875` 上升到 `380–399` 的 `0.771875`，固定 eval 从
+`0.7109375` 上升到 `0.7421875`，但中间在 `0.703125`–`0.7578125` 间波动。因此当前
+结论是“GRPO 确实学习，但有效 group 比例偏低且截断样本 reward 很低，导致增益有限并
+出现平台趋势”，不是“FSDP2/MUSA pipeline 失效”。
+
+当前没有 entropy、KL、advantage 或 clip fraction 的保存数据，不能据此判断 policy collapse；
+log-prob 全部有限、样本未被移除、weight version 连续递增，暂不支持权重同步异常的判断。
+后续应优先做 response length 和采样数的控制实验，再决定是否调整学习率。
+
 ## 8. 容器重启和持久化
 
 | 位置 | `docker restart` | 删除重建容器 | 建议 |
@@ -945,9 +1058,10 @@ GSM8K 验证样本周期性评估；只有当固定 eval 指标在连续多个�
 ## 11. 最终结论
 
 本次适配已经跨过了“原生 FSDP2 能否在 MUSA 上运行”的阶段，完成了 Miles、Ray、
-SGLang、FSDP2、MCCL 和 Qwen3-0.6B 的多轮 RL 闭环。最重要的结果不是某个 import 成功，
-而是 rollout 数据被 FSDP actor 消费、梯度和 optimizer 实际工作、新权重返回 SGLang，且该链路
-连续运行 10 轮。
+SGLang、FSDP2、MCCL 和 Qwen3-0.6B 的多轮 RL 闭环。200–399 主长跑进一步证明训练 reward
+和固定 GSM8K eval 均有小幅提升，但 binary reward 下 `66.875%` 的 group 为零方差，且
+`15.90625%` 的样本被截断并产生很低 reward，当前应定义为“训练有效但有效学习信号不足、
+增益有限并出现平台趋势”，不能声称已经稳定收敛。
 
-但是，当前仍属于 bring-up/correctness 阶段：固定评估的收敛曲线、FSDP checkpoint resume、
-SGLang 补丁的镜像化以及 Megatron 后端都需要继续完成。
+当前仍属于 bring-up/correctness 与收敛诊断阶段；还需要补充 advantage、entropy、KL、
+梯度和 CUDA/A4500 对照证据。
