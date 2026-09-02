@@ -204,8 +204,7 @@ class DistBucketedWeightUpdateMixin:
         handles = []
         for i, (_name, param) in enumerate(named_tensors):
             params = [
-                torch.empty_like(param.data, device=accelerator.device())
-                for _ in range(get_parallel_state().ep.size)
+                torch.empty_like(param.data, device=accelerator.device()) for _ in range(get_parallel_state().ep.size)
             ]
             handle = dist.all_gather(params, param.data, group=get_parallel_state().ep.group, async_op=True)
             handles.append(handle)

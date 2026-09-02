@@ -13,6 +13,7 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
+
 try:
     from sglang.srt.debug_utils.dumper import DumperConfig, _get_rank, dumper
 except ImportError as exc:
@@ -344,8 +345,7 @@ def _get_phase_override_configs(args: Namespace, phase: DumperPhase) -> dict[str
     if DumperConfig is None:
         if args.dumper_enable or raw:
             raise RuntimeError(
-                "The installed SGLang does not provide DumperConfig; "
-                "dumper options are unavailable."
+                "The installed SGLang does not provide DumperConfig; " "dumper options are unavailable."
             )
         return {"enable": False}
     return {"enable": args.dumper_enable, **DumperConfig._kv_pairs_to_dict(raw)}

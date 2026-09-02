@@ -100,9 +100,7 @@ class DeepSeekFamily:
         generation-ready tails; ``add_generation_prompt=False`` strips it.
         """
         if self.template is None:
-            raise ImportError(
-                "DeepSeek V4 chat rendering requires an SGLang build that provides encoding_dsv4"
-            )
+            raise ImportError("DeepSeek V4 chat rendering requires an SGLang build that provides encoding_dsv4")
         encode_config = self._build_encode_config(kwargs)
         if tools:
             messages = _inject_tools_into_system(messages, tools)

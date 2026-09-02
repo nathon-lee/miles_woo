@@ -126,9 +126,7 @@ class ServerGroup:
             # Ray masks CUDA_VISIBLE_DEVICES, but this Ray version does not
             # propagate the corresponding mask to MUSA_VISIBLE_DEVICES.
             if accelerator.hardware_platform() == "musa":
-                engine_gpu_ids = ",".join(
-                    str(base_gpu_id + offset) for offset in range(num_gpu_per_engine)
-                )
+                engine_gpu_ids = ",".join(str(base_gpu_id + offset) for offset in range(num_gpu_per_engine))
                 env_vars["MUSA_VISIBLE_DEVICES"] = engine_gpu_ids
                 env_vars["MTHREADS_VISIBLE_DEVICES"] = engine_gpu_ids
                 env_vars["RAY_EXPERIMENTAL_NOSET_MUSA_VISIBLE_DEVICES"] = "1"
