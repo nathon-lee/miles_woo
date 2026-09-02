@@ -292,8 +292,21 @@ def compute_log_probs(
         log_probs = torch.log_softmax(full_logits, dim=-1)
         return log_probs.gather(dim=-1, index=tokens.unsqueeze(-1)).squeeze(-1)
 
-    # TODO: when megatron is not installed, fall back to naive implementation
-    from megatron.core.fusions.fused_cross_entropy import fused_vocab_parallel_cross_entropy
+    try:
+        from megatron.core.fusions.fused_cross_entropy import fused_vocab_parallel_cross_entropy
+    except ModuleNotFoundError as exc:
+        if exc.name != "megatron":
+            raise
+        if process_group is not None and dist.get_world_size(process_group) > 1:
+            raise RuntimeError(
+                "Megatron is required for non-true-on-policy vocab-parallel log-probs; "
+                "the dependency-free fallback only supports full-vocabulary FSDP logits."
+            ) from exc
+
+        # FSDP owns the full vocabulary projection, so no Megatron vocab-parallel
+        # reduction is needed. This keeps the FSDP backend independent of Megatron.
+        token_log_probs = F.log_softmax(logits.float(), dim=-1)
+        return token_log_probs.gather(dim=-1, index=tokens.unsqueeze(-1)).squeeze(-1)
 
     # convert to [seq_len, batch_size, vocab_size] as expected by fused_vocab_parallel_cross_entropy
     logits = logits.unsqueeze(1)

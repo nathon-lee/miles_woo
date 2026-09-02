@@ -609,7 +609,34 @@ class SGLangEngine(RayActor):
         if skip_list is not None:
             # sglang's CheckWeightsReqInput names this field `skip_tensor_list`.
             payload["skip_tensor_list"] = skip_list
-        return self._make_request("weights_checker", payload)
+        try:
+            return self._make_request("weights_checker", payload)
+        except requests.exceptions.HTTPError as exc:
+            # Older MUSA SGLang images expose /weights_checker but validate a
+            # smaller request schema. Retry only with the legacy fields; if the
+            # checker itself reports a weight mismatch, the legacy request will
+            # fail as well and the original error must remain visible.
+            if exc.response is None or exc.response.status_code != 400:
+                raise
+            if skip_list is None and selector == "all":
+                raise
+
+            legacy_payload = {"action": action, "allow_quant_error": allow_quant_error}
+            logger.warning(
+                "SGLang /weights_checker rejected optional selector/skip-list fields; "
+                "retrying legacy request for action=%s. The legacy checker cannot exclude "
+                "derived tensors, so any resulting mismatch remains fatal.",
+                action,
+            )
+            try:
+                return self._make_request("weights_checker", legacy_payload)
+            except requests.exceptions.HTTPError as legacy_exc:
+                initial_body = exc.response.text if exc.response is not None else ""
+                legacy_body = legacy_exc.response.text if legacy_exc.response is not None else ""
+                raise RuntimeError(
+                    "SGLang /weights_checker failed for both the extended and legacy request schemas; "
+                    f"action={action!r}, extended_response={initial_body!r}, legacy_response={legacy_body!r}"
+                ) from legacy_exc
 
     def pull_weights(self, target_version: int):
         """Have the engine sync every host it spans to target_version: each host pulls the
@@ -705,12 +732,30 @@ class SGLangEngine(RayActor):
         return response
 
     def begin_weight_update(self, selector: str = "all"):
-        """Open a weight-update session on the engine (restores packed weights for loading)."""
-        return self._make_request("begin_weight_update", {"selector": selector})
+        """Open a weight-update session, if supported by the SGLang server."""
+        try:
+            return self._make_request("begin_weight_update", {"selector": selector})
+        except requests.exceptions.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                logger.warning(
+                    "SGLang does not expose /begin_weight_update; "
+                    "continuing with direct weight update compatibility mode."
+                )
+                return {"skipped": True}
+            raise
 
     def end_weight_update(self):
-        """Close the weight-update session (post-load + quant post-process on the full model)."""
-        return self._make_request("end_weight_update", {})
+        """Close a weight-update session, if supported by the SGLang server."""
+        try:
+            return self._make_request("end_weight_update", {})
+        except requests.exceptions.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                logger.warning(
+                    "SGLang does not expose /end_weight_update; "
+                    "continuing with direct weight update compatibility mode."
+                )
+                return {"skipped": True}
+            raise
 
     def update_weight_version(self, weight_version: str):
         return self._make_request(

@@ -100,6 +100,11 @@ def execute():
         sglang_args += "--sglang-disable-cuda-graph "
 
     ci_args = "--ci-test "
+    if musa_mode:
+        # SGLang's weight checker also randomizes derived RoPE caches.  These
+        # buffers are rebuilt by the runtime and are not trainer weights, so
+        # comparing them would report a false mismatch on MUSA.
+        ci_args += "--check-weight-update-skip-list rotary_emb.cos_sin_cache "
 
     misc_args = "--actor-num-nodes 1 " "--colocate " f"--actor-num-gpus-per-node {NUM_GPUS} "
     if musa_mode:

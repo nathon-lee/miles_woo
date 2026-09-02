@@ -16,7 +16,7 @@ from miles.ray.rollout.addr_allocator import (
 )
 from miles.ray.rollout.server_engine import ServerEngine
 from miles.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
-from miles.utils import dumper_utils
+from miles.utils import accelerator, dumper_utils
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +122,14 @@ class ServerGroup:
                 }.items()
             }
             env_vars.update(dumper_utils.get_sglang_env(self.args))
+
+            # Ray masks CUDA_VISIBLE_DEVICES, but this Ray version does not
+            # propagate the corresponding mask to MUSA_VISIBLE_DEVICES.
+            if accelerator.hardware_platform() == "musa":
+                engine_gpu_ids = ",".join(str(base_gpu_id + offset) for offset in range(num_gpu_per_engine))
+                env_vars["MUSA_VISIBLE_DEVICES"] = engine_gpu_ids
+                env_vars["MTHREADS_VISIBLE_DEVICES"] = engine_gpu_ids
+                env_vars["RAY_EXPERIMENTAL_NOSET_MUSA_VISIBLE_DEVICES"] = "1"
 
             # The node-0 facade launches SGLangServerActor (same job), which
             # spawns SchedulerActors for ALL of the engine's ranks — so it
