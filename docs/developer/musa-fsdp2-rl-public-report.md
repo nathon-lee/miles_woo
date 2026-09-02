@@ -174,6 +174,31 @@ RTX A4500/CUDA 仅是建议的后续基线，不代表 NVIDIA 官方测试结果
 用于声称 MUSA 与 NVIDIA 的收敛性能或最终精度一致。需要进行硬件归因时，应使用相同
 checkpoint、数据划分、采样参数和固定 eval 集，在 NVIDIA GPU 上单独复现实验并记录结果。
 
+这里需要区分“没有官方同配置收敛曲线”和“没有公开 NVIDIA 相关资料”。目前检索到的
+公开证据包括：
+
+- [Qwen3 官方仓库 issue #1723](https://github.com/QwenLM/Qwen3/issues/1723) 收录了
+  Qwen3-0.6B-Base 的 GSM8K 复现差异：原始报告值为 `59.59%`，CUDA/BF16、8-shot、greedy
+  的复现为 `49.81%`（flexible extract）和 `49.73%`（strict match）。这说明模型变体、
+  few-shot、解码和答案抽取规则必须对齐，不能直接把 `59.59%` 当作本实验基线。
+- [Slime issue #385](https://github.com/THUDM/slime/issues/385) 记录了 Qwen3-0.6B、
+  GSM8K、2×H200、colocate 的实验：`rollout_time≈245.6 s`、`total_train_time≈287.3 s`，
+  并报告 rollout 阶段部分时间 GPU 利用率为 0%。作者同时注明结果可能不准确；这主要是
+  rollout/等待性能证据，不是 FSDP2 收敛证据。
+- [Slime issue #1072](https://github.com/THUDM/slime/issues/1072) 在 8×H800、
+  Qwen3-1.7B-Base 上报告 `wait_time_ratio≈0.5` 和约 4 倍吞吐差异，问题重点是 rollout
+  与部署/等待路径，不是硬件收敛精度。
+- [Miles issue #1499](https://github.com/radixark/miles/issues/1499) 明确指出公开资料
+  缺少 Miles/VERL × FSDP/Megatron 的严格可比 benchmark；现有数据混合了 rollout、等待
+  时间以及 colocate/disaggregated 影响。
+- [Qwen3-0.6B 官方模型卡](https://huggingface.co/Qwen/Qwen3-0.6B) 建议 thinking mode 使用
+  `temperature=0.6, top_p=0.95, top_k=20`，并警告 greedy decoding 可能导致性能下降或
+  重复。因此，官方 GSM8K 分数和本实验 `eval/gsm8k` 的比较必须先统一采样协议。
+
+这些资料可以作为 NVIDIA/Qwen3 的外部参考，但不能替代同一 checkpoint、同一数据划分、
+同一采样参数和同一固定 eval 集上的 CUDA FSDP2 实验。当前报告仍不应把公开的 H200/H800
+或 CUDA 复现数字写成 NVIDIA 官方的 Miles FSDP2 收敛结果。
+
 ### 3.6 主长跑 200–399 的 reward signal 诊断
 
 主长跑 `20260901-191717` 共完成 200 个训练 rollout，包含 3200 个样本和 800 个四样本

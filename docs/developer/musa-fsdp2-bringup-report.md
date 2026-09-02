@@ -974,6 +974,35 @@ length 为 `546.7`，`eval/truncated_ratio` 为 `0.1171875`。相较 checkpoint 
 等价。若需要硬件归因，应在 RTX A4500 上使用相同模型、数据、采样参数、固定 eval 集和
 checkpoint 起点，独立完成 CUDA FSDP2 基线后再比较。
 
+#### 7.5.1 已找到的公开相关证据
+
+这里的“没有 NVIDIA 官方同配置结果”不等于“互联网上没有任何 NVIDIA/Qwen3/GSM8K
+数据”。截至本报告检索，能确认的公开资料如下：
+
+- Qwen 官方仓库的 issue `#1723` 记录了 Qwen3-0.6B-Base 的 GSM8K 复现差异：原始报告值
+  为 `59.59%`，一组 CUDA/BF16、8-shot、greedy 的复现为 `49.81%`（flexible extract）和
+  `49.73%`（strict match）。这说明评测协议、模型变体和解码设置会显著改变分数，不能
+  直接把 `59.59%` 当作本实验的 baseline。来源：[Qwen3 issue #1723](https://github.com/QwenLM/Qwen3/issues/1723)。
+- Slime issue `#385` 是最接近本实验配置的公开 NVIDIA 记录：Qwen3-0.6B、GSM8K、2×H200、
+  colocate。记录的 `perf/rollout_time` 为约 `245.6 s`，`perf/total_train_time` 为约
+  `287.3 s`；同配置 VERL 的 generation/step 约为 `9.1/33.6 s`，作者还观察到 rollout
+  阶段部分时间 GPU 利用率为 0%。该记录的标题明确提示结果可能不准确，且主要是吞吐/等待
+  数据，不是收敛曲线。来源：[Slime issue #385](https://github.com/THUDM/slime/issues/385)。
+- Slime issue `#1072` 在 Qwen3-1.7B-Base、8×H800 上报告了约 4 倍训练步骤耗时、
+  `perf/wait_time_ratio≈0.5` 和较高 rollout 时间；作者将问题指向 rollout 与等待/部署
+  路径，而不是给出 FSDP 收敛结论。来源：[Slime issue #1072](https://github.com/THUDM/slime/issues/1072)。
+- Miles issue `#1499` 明确提出建立 Miles/VERL × FSDP/Megatron 的可控 benchmark，并指出
+  当时公开数据主要来自 Slime，混合了 rollout、等待时间和 colocate/disaggregated 影响，
+  缺少严格的 FSDP 对照。来源：[Miles issue #1499](https://github.com/radixark/miles/issues/1499)。
+- Qwen 官方模型卡建议 thinking mode 使用 `temperature=0.6, top_p=0.95, top_k=20`，并
+  明确不建议 greedy decoding，因为可能导致性能下降或无休止重复。这个建议也说明，若将
+  Qwen 官方分数与本实验比较，必须先对齐 thinking 开关和采样参数。来源：[Qwen3-0.6B
+  model card](https://huggingface.co/Qwen/Qwen3-0.6B)。
+
+上述资料能够支持“公开 NVIDIA 环境中存在性能和复现差异”的判断，但不能支持“某个 NVIDIA
+GPU 上的 Miles FSDP2 已经达到某个固定收敛精度”。因此，公开资料仍只能作为实验设计和
+问题定位的参考；硬件归因必须由同配置 CUDA FSDP2 实测完成。
+
 ### 7.6 主长跑 200–399 的 reward signal 诊断
 
 对主长跑 `20260901-191717` 的 200 个训练 rollout 进行逐文件分析，共得到 3200 个样本、
