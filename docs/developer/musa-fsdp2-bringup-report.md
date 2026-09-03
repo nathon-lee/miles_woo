@@ -32,11 +32,14 @@ GSM8K prompt
   `mixed_version_ratio=0.0`，未观察到新旧权重混用。
 - 最后保存的梯度范数为 `4.013991355895996`，证明确实执行了反向传播和参数更新。
 - 最终 10-step 日志中没有 `Traceback` 或 `AssertionError`。
-- 后续 180 个 rollout 的 reward 均值从前 20 个的约 `0.628` 提升到后 50 个的
-  `0.700`，但仍有较大波动，尚不足以证明 RL 已收敛。
+- 主区间 rollout `200–399` 完成 200 个 rollout、3200 条 trajectory，并生成 checkpoint
+  `400`；从 checkpoint `400` 继续到 `439` 的 A/B 试验也正常完成。
+- 主区间 reward 窗口均值由 `0.718750` 提升到 `0.771875`，但 completed 样本正确率基本不变，
+  提升很大程度伴随截断率下降，仍不足以证明数学能力稳定提升。
 
-当前结论必须限定为：**Miles 的 FSDP2 RL 训练闭环已在 MUSA 上跑通；180-rollout
-长跑显示 reward 有提升并在约 `0.70` 附近波动，但尚不能声称模型已经收敛。**
+当前结论必须限定为：**Miles 的 FSDP2 RL 训练闭环已在 MUSA 上跑通；200–399 主长跑显示
+reward 有小幅提升，固定 eval 有弱提升，但有效 group 信号不足、曲线波动明显，尚不能声称
+模型已经稳定收敛。**
 Megatron 路径也尚未完成。
 
 ## 2. 实验范围与环境
@@ -66,6 +69,39 @@ Megatron 路径也尚未完成。
 这些版本和路径都是当时实验快照；更换容器、SGLang 镜像或 Ray 版本后应重新执行
 本报告中的 preflight。
 
+### 2.2 Docker 启动与 MUSA 卡映射
+
+本次实验使用 host bind mount 将宿主机工作目录映射到容器的
+`/workspace/host`，并通过设备节点和环境变量暴露/选择 MUSA 卡。`--privileged` 与
+`-v /dev:/dev` 负责让容器能够访问 MUSA 驱动设备；真正的卡选择由
+`MUSA_VISIBLE_DEVICES` 和 `MTHREADS_VISIBLE_DEVICES` 完成。下面命令可从现有容器读取
+镜像名后重建等价容器，避免把具体镜像标签写死：
+
+```bash
+IMAGE=$(docker inspect -f '{{.Config.Image}}' miles-musa-35066)
+
+docker run -it --rm \
+  --name miles-musa-35066 \
+  --privileged \
+  --network host \
+  --ipc host \
+  --shm-size=32g \
+  -v /dev:/dev \
+  -v /home/mccxadmin:/workspace/host:rw \
+  -e MILES_HARDWARE_PLATFORM=musa \
+  -e MUSA_VISIBLE_DEVICES=0,1,2 \
+  -e MTHREADS_VISIBLE_DEVICES=0,1,2 \
+  -e CUDA_VISIBLE_DEVICES=0,1,2 \
+  -e RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0 \
+  "$IMAGE" /bin/bash
+```
+
+如果节点的 MUSA 运行时要求显式传递设备节点，可在 `docker run` 中额外加入节点上实际
+存在的 `--device=/dev/<device>` 参数；不要直接假定设备节点名称。进入容器后仍需执行
+设备预检，确认 `torch.musa.device_count()`、`MUSA_VISIBLE_DEVICES` 和
+`MTHREADS_VISIBLE_DEVICES` 一致。Ray actor 会在每个 rank 的 runtime environment 中再次
+设置单卡 mask，这是进程级映射，不是 Docker 启动时的全局卡选择。
+
 ### 2.3 硬件型号识别说明
 
 2026-09-01 在节点上交叉验证后，`zjlab-gmi` 将 8 张物理卡显示为 `X10000`；
@@ -92,33 +128,25 @@ for i in range(torch.musa.device_count()):
 '
 ```
 
-### 2.2 代码分支和状态
+### 2.4 代码分支和状态
 
-报告编写时的本地分支为：
-
-```text
-feat/musa-fsdp2-correctness
-```
-
-相关提交：
-
-| Commit | 内容 | 状态 |
-|---|---|---|
-| `31285d03` | MUSA 硬件平台抽象 | 已提交 |
-| `e36c68ae` | FSDP alignment 路径的 MUSA 适配 | 已提交 |
-| `400ebad6` | Ray 设备映射、SGLang 兼容、FSDP2 闭环修改归档 | 已提交 |
-| `0bf141a7` | MUSA 权重检查跳过派生 RoPE cache | 已提交且当时与远端对齐 |
-
-报告编写时仍有三个未提交文件：
+本报告对应的代码已同步到 Moore Threads GitLab 仓库：
 
 ```text
-miles/backends/sglang_utils/sglang_engine.py
-miles/backends/training_utils/loss_hub/math_utils.py
-tests/fast/backends/sglang_utils/test_sglang_engine.py
+仓库：https://sh-code.mthreads.com/ai/miles
+分支：feat/musa-fsdp2-musa-adaptation
+提交：d582a72a688ebad08bdd1a41d91ba663869fe1e4
+分支链接：https://sh-code.mthreads.com/ai/miles/-/tree/feat/musa-fsdp2-musa-adaptation
+提交链接：https://sh-code.mthreads.com/ai/miles/-/commit/d582a72a688ebad08bdd1a41d91ba663869fe1e4
 ```
 
-它们分别对应 SGLang 旧版 `/weights_checker` 请求格式兼容、FSDP full-vocabulary
-log-prob 的无 Megatron fallback，以及 checker 兼容测试。在正式归档前还需要补充聚焦测试并提交。
+该提交包含本次 MUSA/FSDP2 适配、Ray 设备映射、SGLang 兼容、log-prob fallback 以及相关
+测试；本地群空间维护的两份总结文档未包含在该提交中。原先个人工作区中的探索性 commit
+链不作为 Moore Threads GitLab 的归档依据。
+
+本次归档覆盖 SGLang 旧版 `/weights_checker` 请求格式兼容、FSDP full-vocabulary
+log-prob 的无 Megatron fallback，以及 checker 兼容测试；上述代码和聚焦测试现已提交，
+后续只需在目标环境中复核即可。
 
 ## 3. 验证分层
 
@@ -132,7 +160,7 @@ log-prob 的无 Megatron fallback，以及 checker 兼容测试。在正式归�
 | `--debug-rollout-only` | Miles + Ray + SGLang 能生成 rollout | FSDP 训练与权重同步 | 通过 |
 | 单轮闭环 | rollout、FSDP 训练、权重同步可串联 | 长期稳定性和收敛 | 通过 |
 | 10-step GSM8K | 多轮 RL 闭环、权重版本递增、梯度非零 | 统计显著的收敛 | 通过 |
-| 固定评估的夜间长跑 | 收敛趋势、checkpoint/resume、长期稳定性 | 已完成 180 rollout 训练统计；固定 eval 和完整 resume 仍待确认 | 部分通过 |
+| 固定评估的夜间长跑 | 收敛趋势、checkpoint/resume、长期稳定性 | 已完成 rollout 200–399、固定 eval 和 checkpoint 400→439 resume；统计显著收敛和长期生产稳定性仍待确认 | 部分通过 |
 | Megatron 后端 | Megatron checkpoint、训练及同步链路 | 不应从 FSDP 结果推断 | 未完成 |
 
 ## 4. 遇到的主要问题与解决方案
@@ -370,8 +398,8 @@ max_abs_err=2.0
 - 当前旧 SGLang server 对 `skip_tensor_list` 请求字段的兼容不完整，因此还在容器内的
   `/home/sglang/python/sglang/srt/utils/weight_checker.py` 中临时跳过后缀为
   `rotary_emb.cos_sin_cache` 的 tensor。
-- Miles 工作区中还有未提交的 400 schema fallback：旧 server 拒绝新字段时重试
-  legacy payload，但如果 legacy checker 仍报权重错误，依然让任务失败。
+- 400 schema fallback 已纳入 Miles 代码提交：旧 server 拒绝新字段时重试 legacy payload，
+  但如果 legacy checker 仍报权重错误，依然让任务失败。
 
 注意：`/home/sglang/...` 是容器内修改。`docker restart` 通常会保留，但删除并重建
 容器后会丢失，必须归档到 SGLang fork、补丁文件或新镜像。
@@ -401,7 +429,8 @@ return token_log_probs.gather(dim=-1, index=tokens.unsqueeze(-1)).squeeze(-1)
 该 fallback 仅用于完整 vocabulary logits。如果存在多 rank vocab-parallel process group，仍明确
 要求 Megatron，避免在真正的 tensor-parallel 场景下得到错误结果。
 
-这个修复目前还没有提交，但它已参与成功的 GSM8K 10-step 实验。
+该修复已纳入 Moore Threads GitLab 代码归档，并参与了成功的 GSM8K 多轮实验；容器内
+临时修改仍需迁移到可重放的补丁或镜像。
 
 ### 4.10 Log-prob checker 曾暴露真实的模型不对齐
 
@@ -639,7 +668,7 @@ for rollout_id in range(args.start_rollout_id, args.num_rollout):
 | `miles/backends/sglang_utils/sglang_engine.py` | 兼容旧 SGLang 的权重更新端点和 checker schema |
 | `miles/utils/dumper_utils.py` | 兼容没有 `DumperConfig` 的 SGLang |
 | `miles/utils/arguments.py` | 兼容某些旧 SGLang 参数未注册的情况 |
-| `miles/backends/training_utils/loss_hub/math_utils.py` | FSDP full-vocabulary log-prob 无 Megatron fallback（未提交） |
+| `miles/backends/training_utils/loss_hub/math_utils.py` | FSDP full-vocabulary log-prob 无 Megatron fallback |
 | `tools/convert_hf_to_torch_dist.py` | 将 CUDA/NCCL 直接调用替换为 accelerator/MCCL，但转换仍未跑通 |
 | `tests/e2e/fsdp/test_qwen3_0.6B_megatron_fsdp_align.py` | 添加 MUSA 参数和 RoPE derived-buffer skip |
 
@@ -907,42 +936,37 @@ grad_norm: 4.013991355895996
 - 权重时序：每轮只使用单一版本的权重，没有 mixed-version rollout。
 - 学习信号：梯度范数非零，但 `n_samples_per_prompt=2` 会产生较多全对/全错组，
   这些组的 GRPO advantage 为零。
-- 收敛性：前 5 轮平均奖励约 `0.675`，后 5 轮约 `0.650`，没有足够证据说明奖励
-  在上升。
+- 收敛性：10-step 仅用于验证闭环，前后窗口 reward 不能代表当前 200–399 主长跑的
+  收敛趋势；该短跑没有足够数据判断 reward 上升或下降。
 - 比较方法：训练 prompt 每轮都不同，不能用训练 batch reward 直接代替固定评估集
   accuracy。
 
-### 7.3 180-rollout 长跑的收敛趋势
+### 7.3 主长跑 200–399 的收敛趋势
 
-在同一 MUSA FSDP2 + SGLang 配置下，长跑日志共解析到 rollout `0`–`179`，共 180
-个 `perf` 记录。该实验的最后完整 checkpoint 是 iteration `160`；rollout `179`
-附近的 checkpoint 保存阶段因 `/workspace/host` 所在文件系统空间耗尽而失败，因此
-rollout 数量和 checkpoint 可恢复性必须分开记录。
+当前主分析区间覆盖 rollout `200`–`399`，共 200 个 rollout、3200 条 trajectory、800 个
+四样本 group，checkpoint tracker 最终为 `400`。此前 0–179 的数据属于阶段性历史结果；
+期间出现的磁盘满和不完整 checkpoint 也已与后续有效 checkpoint 分开处理。
 
 Reward 窗口统计如下：
 
 | 窗口 | Reward mean | Min | Max |
 |---|---:|---:|---:|
-| 前 20 个 rollout | 约 `0.628` | — | — |
-| 后 50 个 rollout | `0.700000` | `0.312500` | `1.000000` |
-| 后 20 个 rollout | `0.721875` | `0.312500` | `1.000000` |
-| 后 10 个 rollout | `0.687500` | `0.375000` | `1.000000` |
-| rollout 179 | `0.562500` | — | — |
+| 200–219 | `0.718750` | `0.437500` | `1.000000` |
+| 240–259 | `0.675000` | `0.187500` | `1.000000` |
+| 280–299 | `0.743750` | `0.500000` | `1.000000` |
+| 320–339 | `0.759375` | `0.500000` | `1.000000` |
+| 360–379 | `0.746875` | `0.437500` | `1.000000` |
+| 380–399 | `0.771875` | `0.500000` | `0.937500` |
 
 这组数据支持以下有限结论：
 
-- 后 50 个 rollout 相比前 20 个，平均 reward 提升约 `0.072`（约 `11%`），说明训练
-  中存在有效学习信号。
-- 后 10、后 20 和后 50 个窗口均在约 `0.70` 附近，表现出平台趋势，但窗口均值并非
-  单调上升，且单轮 reward 仍在 `0.3125`–`1.0` 之间波动。
-- 因此当前结论是“训练有效并出现初步平台趋势”，不能写成“模型已经收敛”。训练
-  batch reward 不能替代固定验证集上的 accuracy/reward。
+- 窗口均值由 `0.718750` 升至 `0.771875`，但 completed 样本 reward 均值约由 `0.834559`
+  变为 `0.832765`，基本不变；truncated ratio 则由 `15.0%` 降至 `8.4375%`。
+- 800 个 group 中 `66.875%` 为全对或全错，只有约三分之一 group 能提供有效相对信号。
+- 因此当前结论是“输出完成度改善、训练有效但数学正确率增益有限并接近平台”，不能写成
+  “模型已经收敛”。训练 batch reward 不能替代固定验证集 accuracy。
 
-后续应从 checkpoint `160` 恢复，在释放持久化存储空间后继续运行，并使用同一批固定
-GSM8K 验证样本周期性评估；只有当固定 eval 指标在连续多个窗口不再提升且 loss、梯度
-范数和截断率稳定时，才可判断接近收敛。
-
-### 7.4 固定 GSM8K eval：checkpoint 160 → 200
+### 7.4 固定 GSM8K eval：历史 160 → 200 与主长跑
 
 随后使用同一批 128 条 GSM8K 验证样本，对 checkpoint `160` 和 checkpoint `200` 做了
 固定评估：
@@ -961,17 +985,18 @@ length 为 `546.7`，`eval/truncated_ratio` 为 `0.1171875`。相较 checkpoint 
 0 步模型；本次实际评估模型来自 checkpoint `200`。同理，`weight_version=1.0` 是该
 评估进程的内部权重版本，不是训练 checkpoint 编号。
 
-后续长跑设置为 `--eval-interval 20` 时，checkpoint `200` 之后应在 rollout `220、240、
-...、400` 进行相同固定评估，并比较 `eval/gsm8k` 曲线。只有连续 3–5 个评估点没有提升，
-才考虑调整学习率、采样数或 response length。
+主长跑已经记录 rollout `200`–`399` 的固定 eval：`0.7109375`、`0.71875`、`0.7578125`、
+`0.7265625`、`0.71875`、`0.703125`、`0.703125`、`0.7109375`、`0.7421875`、`0.734375`、
+`0.7421875`。该序列有弱正向趋势但波动明显；checkpoint `439` 的两次随机 eval 为
+`0.71875` 和 `0.703125`，说明必须使用确定性采样或多次重复评测。
 
 ### 7.5 NVIDIA 官方对照数据边界
 
 截至本报告，材料中没有 NVIDIA 官方团队在相同 Miles、Qwen3-0.6B、GSM8K 和 FSDP2
 配置下发布或运行的对照结果。报告中的 MUSA 指标来自本项目在 Moore Threads 节点上的
-实测；代码仓库中的 CUDA/A4500 运行配置和社区讨论只能作为后续对照实验的方案，不能写成
+实测；代码仓库中的 CUDA 运行配置和社区讨论只能作为后续对照实验的方案，不能写成
 “NVIDIA 官方结果”。因此，当前不能用本报告证明 MUSA 与 NVIDIA 的收敛速度或最终精度
-等价。若需要硬件归因，应在 RTX A4500 上使用相同模型、数据、采样参数、固定 eval 集和
+等价。若需要硬件归因，应在 CUDA 环境上使用相同模型、数据、采样参数、固定 eval 集和
 checkpoint 起点，独立完成 CUDA FSDP2 基线后再比较。
 
 #### 7.5.1 已找到的公开相关证据
@@ -983,17 +1008,14 @@ checkpoint 起点，独立完成 CUDA FSDP2 基线后再比较。
   为 `59.59%`，一组 CUDA/BF16、8-shot、greedy 的复现为 `49.81%`（flexible extract）和
   `49.73%`（strict match）。这说明评测协议、模型变体和解码设置会显著改变分数，不能
   直接把 `59.59%` 当作本实验的 baseline。来源：[Qwen3 issue #1723](https://github.com/QwenLM/Qwen3/issues/1723)。
-- Slime issue `#385` 是最接近本实验配置的公开 NVIDIA 记录：Qwen3-0.6B、GSM8K、2×H200、
-  colocate。记录的 `perf/rollout_time` 为约 `245.6 s`，`perf/total_train_time` 为约
-  `287.3 s`；同配置 VERL 的 generation/step 约为 `9.1/33.6 s`，作者还观察到 rollout
-  阶段部分时间 GPU 利用率为 0%。该记录的标题明确提示结果可能不准确，且主要是吞吐/等待
-  数据，不是收敛曲线。来源：[Slime issue #385](https://github.com/THUDM/slime/issues/385)。
-- Slime issue `#1072` 在 Qwen3-1.7B-Base、8×H800 上报告了约 4 倍训练步骤耗时、
-  `perf/wait_time_ratio≈0.5` 和较高 rollout 时间；作者将问题指向 rollout 与等待/部署
-  路径，而不是给出 FSDP 收敛结论。来源：[Slime issue #1072](https://github.com/THUDM/slime/issues/1072)。
-- Miles issue `#1499` 明确提出建立 Miles/VERL × FSDP/Megatron 的可控 benchmark，并指出
+- Slime issue `#385` 和 `#1072` 是公开的 rollout/等待性能记录，作者也提示结果存在不确定性；
+  它们主要用于说明部署和等待路径问题，不是 FSDP 收敛精度证据。来源：
+  [Slime issue #385](https://github.com/THUDM/slime/issues/385)、
+  [Slime issue #1072](https://github.com/THUDM/slime/issues/1072)。
+- Miles 上游 issue `#1499` 明确提出建立 Miles/VERL × FSDP/Megatron 的可控 benchmark，并指出
   当时公开数据主要来自 Slime，混合了 rollout、等待时间和 colocate/disaggregated 影响，
-  缺少严格的 FSDP 对照。来源：[Miles issue #1499](https://github.com/radixark/miles/issues/1499)。
+  缺少严格的 FSDP 对照。该条属于第三方上游公开资料，保留其原始 GitHub 链接；本项目代码
+  归档和提交信息以 Moore Threads GitLab 为准。来源：[Miles issue #1499](https://github.com/radixark/miles/issues/1499)。
 - Qwen 官方模型卡建议 thinking mode 使用 `temperature=0.6, top_p=0.95, top_k=20`，并
   明确不建议 greedy decoding，因为可能导致性能下降或无休止重复。这个建议也说明，若将
   Qwen 官方分数与本实验比较，必须先对齐 thinking 开关和采样参数。来源：[Qwen3-0.6B
@@ -1002,6 +1024,26 @@ checkpoint 起点，独立完成 CUDA FSDP2 基线后再比较。
 上述资料能够支持“公开 NVIDIA 环境中存在性能和复现差异”的判断，但不能支持“某个 NVIDIA
 GPU 上的 Miles FSDP2 已经达到某个固定收敛精度”。因此，公开资料仍只能作为实验设计和
 问题定位的参考；硬件归因必须由同配置 CUDA FSDP2 实测完成。
+
+### 7.5.2 checkpoint 439 的评测可重复性
+
+对同一个 checkpoint `439` 做了两次独立的 128 条 GSM8K eval。两次日志都明确加载了
+`iter_0000439/model`、optimizer 和 LR scheduler，说明评测使用的是同一训练 checkpoint：
+
+| Eval 运行 | 正确数 | `eval/gsm8k` | completed | truncated |
+|---|---:|---:|---:|---:|
+| `20260902-171924` | 92/128 | `0.71875` | 116 | 12 |
+| `20260902-173226` | 90/128 | `0.703125` | 113 | 15 |
+
+两次评测的 prompt 和 label 均为 `128/128` 相同，但生成 response 只有 `8/128` 相同，
+reward 有 `116/128` 相同。SGLang 日志显示实际默认 chat sampling params 为
+`temperature=0.6, top_k=20, top_p=0.95`。因此这两个分数的差异应视为随机采样和截断造成的
+评测方差，而不是 checkpoint 439 在两次运行之间发生了训练变化。
+
+评测文件中的 `rollout_id=0` 是独立 eval 进程的本地编号，`weight_versions=1` 是该进程的
+内部权重版本；二者都不能替代日志中的 `iter_0000439` checkpoint 证据。后续固定评测必须
+显式设置 `--eval-temperature 0 --eval-top-k 1 --eval-top-p 1`，并连续重复至少 3 次后再
+报告均值、标准差和截断率。
 
 ### 7.6 主长跑 200–399 的 reward signal 诊断
 
@@ -1045,17 +1087,17 @@ log-prob 全部有限、样本未被移除、weight version 连续递增，暂�
 
 ### 9.1 FSDP2 路径
 
-1. 将当前未提交的 log-prob fallback、SGLang checker schema 兼容和聚焦测试正式归档。
-2. 把容器内 `weight_checker.py` 的 RoPE cache 修改移到可重放的 SGLang patch 或定制镜像。
-3. 跑固定 GSM8K eval 的 100–200 rollout 长跑，记录评估曲线，而不只是训练 batch reward。
-4. 验证 FSDP checkpoint 在 MUSA 上的 save/resume，包括 optimizer、LR scheduler、RNG 和
-   `next_rollout_id`。
-5. 将长跑输出和 checkpoint 放到有足够空间且可持久化的 host/data 挂载，避免在保存阶段因
+1. 把容器内 `weight_checker.py` 的 RoPE cache 修改移到可重放的 SGLang patch 或定制镜像。
+2. 使用确定性采样参数重复 checkpoint `200`、`400` 和 `439` 的固定 GSM8K eval，记录均值、
+   标准差和截断率，避免把随机采样波动误判为模型收敛或退化。
+3. checkpoint `400→439` 的 model、optimizer、scheduler 和 rollout 状态已验证可继续运行；
+   仍需补充 RNG 逐位可复现性验证。
+4. 将长跑输出和 checkpoint 放到有足够空间且可持久化的 host/data 挂载，避免在保存阶段因
    `/workspace/host`（`/home` 文件系统）满而中断。
-6. 增加至少一个自动化 MUSA CI smoke，覆盖 Ray GPU mapping、FSDP forward/backward 和一次
+5. 增加至少一个自动化 MUSA CI smoke，覆盖 Ray GPU mapping、FSDP forward/backward 和一次
    SGLang weight update。
-7. 确认 `n_samples_per_prompt=4` 或 dynamic sampling 后非零方差 group 比例提升，避免大量
-   GRPO zero-advantage batch。
+6. 对 `n_samples_per_prompt=4` 与 `8` 做同 checkpoint、同数据的 A/B，确认 mixed group 比例
+   和有效 advantage 是否提升，避免大量 GRPO zero-advantage batch。
 
 ### 9.2 Megatron 路径
 
@@ -1093,4 +1135,132 @@ SGLang、FSDP2、MCCL 和 Qwen3-0.6B 的多轮 RL 闭环。200–399 主长跑�
 增益有限并出现平台趋势”，不能声称已经稳定收敛。
 
 当前仍属于 bring-up/correctness 与收敛诊断阶段；还需要补充 advantage、entropy、KL、
-梯度和 CUDA/A4500 对照证据。
+clip ratio、确定性重复 eval，以及同配置 NVIDIA 对照证据。
+
+## 附录 A：2026-09-03 补充（新增）
+
+本节集中回答评审中提出的配置、数据、收敛和代码审查问题。这里的“样本”明确指生成的
+trajectory；`rollout-batch-size` 指 prompt 数，不能与生成结果数混为一谈。
+
+### A.1 Rollout、生成结果和训练 batch
+
+每个 rollout 的生成 trajectory 数为：
+
+```text
+rollout_batch_size × n_samples_per_prompt
+```
+
+| 实验 | prompt/rollout | 每个 prompt 生成数 | trajectory/rollout | 总 trajectory |
+|---|---:|---:|---:|---:|
+| 10-rollout smoke | 4 | 2 | 8 | 80 |
+| 主长跑 200–399 | 4 | 4 | 16 | 3200 |
+| n=8 A/B 试验 | 4 | 8 | 32 | 按实际 rollout 数计 |
+
+训练侧没有显式传入 `--micro-batch-size`，使用默认值 `1`。固定 batch 的关系为：
+
+```text
+local_batch_size = global_batch_size / data_parallel_size
+num_microbatches = local_batch_size / micro_batch_size
+```
+
+因此 10-rollout 配置 `global_batch_size=8`、DP=2 时，每卡每个训练 step 为 4 个
+micro-batch；主长跑 `global_batch_size=16`、DP=2 时，每卡为 8 个 micro-batch，均为每个
+micro-batch 1 条 trajectory。log-prob 和 actor training 共用该切分。
+
+推理侧 SGLang 使用 continuous batching，调度器动态合并请求；本实验没有固定的推理
+micro-batch。`sglang-chunked-prefill-size` 是 token 分块参数，不是样本 micro-batch。
+
+### A.2 Reward 定义与训练数据
+
+主实验使用 `--rm-type math`。GSM8K parquet 的核心字段是 `messages` 和 `label`：前者
+包含 system/user 对话，后者是标准答案字符串。数学 reward 的判定流程是：提取回答中最后
+一个 `\boxed{...}`，与 `label` 做归一化和数学等价比较；通过为 `1`，否则为 `0`。
+
+例如 label 为 `72` 时：
+
+```text
+“所以答案是 \boxed{72}”       -> reward=1
+“所以答案是 72”               -> reward=0（无法按 math verifier 提取）
+“所以答案是 \boxed{70}”       -> reward=0
+在输出 boxed 答案前被截断       -> reward=0
+```
+
+推理过程可以包含多步解释，但最终答案必须可提取且与 label 数学等价。实现位于
+`miles/rollout/rm_hub/__init__.py` 的 `math` 分支以及 `math_utils.py` 的答案提取/判定函数。
+
+### A.3 Reward 波动的证据解释
+
+200–399 共 3200 条 trajectory、800 个四样本 group：`0000` group 占 12%，`1111` 占
+54.875%，mixed 仅 33.125%。因此 66.875% 的 group 没有 reward 差异，不能提供有效的
+GRPO 相对 advantage。另有 509 条 trajectory 被截断（15.90625%）；完成样本 reward 均值
+约 0.8488，截断样本约 0.1159。
+
+训练 reward 窗口均值从 `200–219` 的 0.71875 上升到 `380–399` 的 0.771875，但固定
+128 题 eval 在 0.703125–0.7578125 间波动。这与二值 reward、prompt 难度变化、组内零方差、
+截断和有限 eval 集共同相符。当前没有完整保存 entropy、KL、advantage 和 clip fraction，
+因此不能据此断言 policy collapse 或 reward hacking。
+
+### A.4 原生 FSDP2 smoke 复现命令
+
+```bash
+export MUSA_VISIBLE_DEVICES=0,1
+export MTHREADS_VISIBLE_DEVICES=0,1
+set -o pipefail
+torchrun --nproc-per-node=2 \
+  --master-addr=127.0.0.1 --master-port=29620 \
+  /workspace/host/musa_fsdp2_smoke.py \
+  2>&1 | tee /workspace/host/musa_fsdp2_smoke.log
+echo "FSDP2_EXIT=${PIPESTATUS[0]}"
+```
+
+成功标志为 `FSDP2_MUSA_SMOKE_OK` 和 `FSDP2_EXIT=0`。该命令只证明原生 FSDP2、DTensor、
+MCCL、forward/backward、AdamW、all-reduce 和 barrier，不证明 Miles RL 已收敛。
+
+### A.5 NVIDIA 对照和 Miles 改动 review 边界
+
+目前没有与本实验完全相同的公开 NVIDIA reward/convergence 曲线。因此 NVIDIA 对照必须
+使用相同 checkpoint、GSM8K 固定 128 题、rollout/micro/global batch、学习率、response
+length、reward parser 和确定性 eval 参数（`--eval-temperature 0 --eval-top-k 1 --eval-top-p 1`）。
+报告暂不填入未经实测的 NVIDIA 数字。
+
+本次 Miles 改动的 review 按六个区域进行：MUSA accelerator/bootstrap、Ray rank 设备映射、
+FSDP2 精度与 checkpoint、无 Megatron 的 full-vocabulary log-prob fallback、SGLang 旧接口/权重
+更新兼容、测试与错误处理。重点检查 CUDA 默认路径是否保持不变、兼容逻辑是否足够窄，以及
+Megatron/HF checkpoint 转换等未验证路径是否被误称为已支持。
+
+代码归档统一对应 Moore Threads GitLab commit：
+
+```text
+分支：feat/musa-fsdp2-musa-adaptation
+commit：d582a72a688ebad08bdd1a41d91ba663869fe1e4
+```
+
+### A.6 GRPO 数据、reward 与参数配比说明（补充）
+
+GSM8K 数据集为每条 prompt 提供一个标准答案 `label`。SGLang 根据采样参数为每个 prompt
+生成若干回答；`n_samples_per_prompt` 表示回答数量，温度参数独立控制采样随机性，二者
+不是同一个概念。例如相同的 `temperature=0.6` 下，将 `n_samples_per_prompt` 从 4 改为
+8 只是生成更多回答，并不等价于调高温度；温度过低时，新增回答可能仍然高度重复。
+
+本实验的 `--rm-type math` 是规则 verifier，不是单独训练的 value function，也没有额外的
+critic。它提取回答最后一个 `\boxed{...}` 中的答案，与 GSM8K `label` 做归一化/数学等价
+比较：正确为 reward `1`，错误、缺少可解析 boxed 答案或生成被截断导致答案不可解析时为
+reward `0`。因此一个 rollout 的 `episode_raw_reward` 是该 rollout 所有 trajectory 的
+二值 reward 平均值，等价于“正确回答数/回答总数”。GRPO 随后在同一 prompt 的回答组内
+计算相对 advantage；`[1,1,0,0]` 能提供有效方向，而 `[1,1,1,1]` 或 `[0,0,0,0]`
+没有组内差异，advantage 信号接近零。
+
+参数配比的作用应分别理解：
+
+| 参数 | 主要影响 | 代价或风险 |
+|---|---|---|
+| `n_samples_per_prompt` | 组内比较数量、mixed group 和 advantage 稳定性 | 推理/显存开销增加；低温度下可能只是重复 |
+| `rollout_batch_size` | 每轮覆盖的不同 prompt 数量、梯度估计稳定性 | 每轮耗时和数据量增加 |
+| `global_batch_size` | 每次 optimizer update 的样本量和梯度噪声 | 改变优化行为，通常需要与学习率一起解释 |
+| `micro-batch-size` | 显存、吞吐和梯度累积次数 | 实现或 loss 缩放不正确时会改变数值结果 |
+| `temperature` | 回答多样性及 reward 分布 | 过低导致组内同质化，过高增加错误和截断 |
+
+主长跑使用每个 prompt 4 个回答；n=8 A/B 用于检验增加组内样本是否提高 mixed group 比例。
+A/B 必须固定 checkpoint、prompt 数据、温度、reward parser、训练步数和固定 eval 集，至少
+比较 `mixed group ratio`、zero-std group ratio、completed reward、truncated ratio、
+advantage std 和固定 GSM8K accuracy，不能只比较单轮 rollout reward。
